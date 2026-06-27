@@ -54,7 +54,8 @@ struct ContentView: View {
                         Text(model.errorMessage ?? "")
                     }
             }
-            .navigationTitle("Loopkeeper")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
@@ -169,7 +170,7 @@ struct ContentView: View {
                             .onTapGesture { Haptics.tap(); selectedTask = task }
                     }
                 } header: {
-                    terminalHeader("# jira", trailing: model.tasksNeedingAction > 0
+                    terminalHeader("# tasks", trailing: model.tasksNeedingAction > 0
                         ? "\(model.tasksNeedingAction) need you" : nil, trailingTint: .orange)
                 }
             }
@@ -228,6 +229,7 @@ struct ContentView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("# \(headerKey(bucket))")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.headerAccent)
             Text("\(loops.count)")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -260,7 +262,9 @@ struct ContentView: View {
     @ViewBuilder
     private func terminalHeader(_ title: String, _ count: Int? = nil, trailing: String? = nil, trailingTint: Color = .secondary) -> some View {
         HStack(spacing: 8) {
-            Text(title).font(.system(size: 12, weight: .semibold, design: .monospaced))
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.headerAccent)
             if let count {
                 Text("\(count)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
             }

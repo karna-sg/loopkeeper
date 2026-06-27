@@ -14,6 +14,14 @@ enum Theme {
             : UIColor.systemBackground
     })
 
+    /// Accent for section labels (`# focus`, `# tasks`…) — a calm teal/cyan that reads as a
+    /// "prompt" color and clearly separates headers from neutral row text, in light + dark.
+    static let headerAccent = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0.40, green: 0.78, blue: 0.74, alpha: 1.0)
+            : UIColor(red: 0.10, green: 0.51, blue: 0.49, alpha: 1.0)
+    })
+
     enum Bucket: String, CaseIterable {
         case overdue, today, upcoming, noDate, awaiting
 
