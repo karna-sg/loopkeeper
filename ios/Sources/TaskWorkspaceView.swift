@@ -104,11 +104,11 @@ struct TaskWorkspaceView: View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("# requirements")
                 if let d = task.description, !d.isEmpty {
-                    Text(d).font(mono).foregroundStyle(.primary).textSelection(.enabled)
+                    MarkdownText(source: d)
                 }
                 if let ac = task.acceptanceCriteria, !ac.isEmpty {
                     Text("acceptance:").font(monoSmall).foregroundStyle(.secondary).padding(.top, 2)
-                    Text(ac).font(mono).foregroundStyle(.primary).textSelection(.enabled)
+                    MarkdownText(source: ac)
                 }
                 if let labels = task.labels, !labels.isEmpty {
                     Text(labels.map { "#\($0)" }.joined(separator: "  "))
@@ -182,8 +182,7 @@ struct TaskWorkspaceView: View {
                 .padding(8)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
         } else {
-            Text(planText.isEmpty ? (task.artifacts?.plan?.text ?? "—") : planText)
-                .font(mono).foregroundStyle(.primary).textSelection(.enabled)
+            MarkdownText(source: planText.isEmpty ? (task.artifacts?.plan?.text ?? "—") : planText)
         }
         textButton(editingPlan ? "[ done editing ]" : "[ edit / annotate ]", .secondary) { editingPlan.toggle() }
         actionButton("approve plan — start dev", .green) {
@@ -201,7 +200,7 @@ struct TaskWorkspaceView: View {
             Text(pr.title ?? task.title)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced)).textSelection(.enabled)
             if let body = pr.body, !body.isEmpty {
-                Text(body).font(mono).foregroundStyle(.secondary).textSelection(.enabled)
+                MarkdownText(source: body, color: .secondary)
             }
             if let diff = pr.diffSummary, !diff.isEmpty {
                 Text(diff).font(monoSmall).foregroundStyle(.tertiary).textSelection(.enabled)
@@ -354,14 +353,14 @@ private struct StageBlock: View {
         switch stage {
         case "plan":
             if let p = task.artifacts?.plan, let text = p.text, !text.isEmpty {
-                bodyText(text)
+                proseText(text)
                 if let rev = p.revision, rev > 0 { dim("rev \(rev)") }
             } else if status != "not_started" {
                 dim("no plan text")
             }
         case "dev":
             if let d = task.artifacts?.dev {
-                if let s = d.summary, !s.isEmpty { bodyText(s) }
+                if let s = d.summary, !s.isEmpty { proseText(s) }
                 let stats = devStats(d)
                 if !stats.isEmpty { dim(stats.joined(separator: "  ·  ")) }
                 if let url = d.branchURL, let u = URL(string: url) { link("branch", u) }
@@ -416,6 +415,12 @@ private struct StageBlock: View {
         return stats
     }
 
+    /// Markdown-bearing prose (plan text, dev summary) rendered clean — no raw `#`, `**`, `-`.
+    @ViewBuilder private func proseText(_ s: String) -> some View {
+        MarkdownText(source: s, size: 13)
+    }
+
+    /// Raw verbatim text (logs, single-line titles) — shown exactly as received.
     @ViewBuilder private func bodyText(_ s: String, color: Color = .primary) -> some View {
         Text(s).font(mono).foregroundStyle(color).textSelection(.enabled)
     }
