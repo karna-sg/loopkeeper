@@ -164,15 +164,16 @@ struct ContentView: View {
                             .onTapGesture { Haptics.tap(); selectedTask = task }
                     }
                 } header: {
-                    HStack {
-                        Label("My Jira Tasks", systemImage: "hammer").textCase(nil)
+                    HStack(spacing: 6) {
+                        Text("# jira")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .textCase(nil)
                         Spacer()
                         if model.tasksNeedingAction > 0 {
-                            Text("\(model.tasksNeedingAction)")
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 7).padding(.vertical, 2)
-                                .background(Color.orange, in: Capsule())
-                                .foregroundStyle(.white)
+                            Text("\(model.tasksNeedingAction) need you")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.orange)
+                                .textCase(nil)
                         }
                     }
                 }

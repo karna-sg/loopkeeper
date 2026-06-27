@@ -1,7 +1,12 @@
 import SwiftUI
 
-/// The per-task workspace (FR-6/7/8): requirements + a 7-stage timeline with artifacts + the three
-/// human gates. Loads detail by id, and polls live status while a stage runs. Mirrors LoopDetailView.
+/// The per-task workspace (FR-6/7/8), terminal-clean: a single readable scroll of monospaced text,
+/// like the transcript of a build. Header line, requirements as plain prose, the 7-stage pipeline as
+/// a compact tree where each stage's artifact is shown inline and fully — nothing hidden in cards or
+/// truncated. The three human gates + Prepare/Address actions are plain text buttons at the top.
+///
+/// Loads detail by id and polls live status while a stage runs. Mirrors LoopDetailView wiring; every
+/// action still calls the same AppModel method, and string decoding stays defensive.
 struct TaskWorkspaceView: View {
     let taskID: String
     @Environment(AppModel.self) private var model
@@ -16,19 +21,29 @@ struct TaskWorkspaceView: View {
     @State private var inFlight = false
     @State private var pollTask: Task<Void, Never>?
 
+    // Terminal-clean type scale. One face (monospaced), hierarchy via weight + dim.
+    private let mono = Font.system(size: 13, design: .monospaced)
+    private let monoSmall = Font.system(size: 11, design: .monospaced)
+
     var body: some View {
         NavigationStack {
-            List {
+            ScrollView {
                 if let task {
-                    requirements(task)
-                    if task.needsAction { gate(task) }
-                    stages(task)
-                    actions(task)
+                    VStack(alignment: .leading, spacing: 18) {
+                        header(task)
+                        if task.needsAction { gate(task) }
+                        primaryAction(task)
+                        requirements(task)
+                        pipeline(task)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else if loading {
-                    HStack { Spacer(); ProgressView(); Spacer() }
+                    HStack { Spacer(); ProgressView().padding(.top, 60); Spacer() }
                 }
             }
-            .listSectionSpacing(.compact)
+            .background(Theme.terminalBG.ignoresSafeArea())
             .navigationTitle(task?.jiraKey ?? "Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
@@ -38,136 +53,224 @@ struct TaskWorkspaceView: View {
         }
     }
 
-    // MARK: sections
+    // MARK: header
 
-    @ViewBuilder private func requirements(_ task: EngTask) -> some View {
-        Section {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Text(task.jiraKey).font(.caption.monospaced().weight(.semibold)).foregroundStyle(.secondary)
-                    stageChip(task.stage, task.status)
-                    Spacer(minLength: 0)
-                    if let url = task.jiraUrl, let u = URL(string: url) {
-                        Button { openURL(u) } label: { Image(systemName: "arrow.up.right.square") }.buttonStyle(.borderless)
-                    }
-                }
-                Text(task.title).font(.subheadline.weight(.semibold))
-                if let d = task.description, !d.isEmpty {
-                    Text(d).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-                if let ac = task.acceptanceCriteria, !ac.isEmpty {
-                    Text("Acceptance").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                    Text(ac).font(.footnote)
-                }
-                if let labels = task.labels, !labels.isEmpty {
-                    Text(labels.map { "#\($0)" }.joined(separator: "  ")).font(.caption2).foregroundStyle(.tertiary)
+    @ViewBuilder private func header(_ task: EngTask) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // key · stage · status — the one-glance state line.
+            HStack(spacing: 6) {
+                Text(task.jiraKey).font(.system(size: 13, weight: .semibold, design: .monospaced))
+                Text("·").foregroundStyle(.tertiary)
+                Text(Theme.stageTitle(task.stage).lowercased()).font(mono).foregroundStyle(.secondary)
+                Text("·").foregroundStyle(.tertiary)
+                Text(Theme.statusToken(task.stage, task.status))
+                    .font(mono).foregroundStyle(Theme.statusTint(task.status))
+                Spacer(minLength: 0)
+                if let url = task.jiraUrl, let u = URL(string: url) {
+                    Button { openURL(u) } label: { Image(systemName: "arrow.up.right.square") }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
                 }
             }
-            .padding(.vertical, 2)
+            Text(task.title)
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .textSelection(.enabled)
+            metaLine(task)
         }
     }
 
-    @ViewBuilder private func stageChip(_ stage: String, _ status: String) -> some View {
-        let c = Theme.stageAccent(status)
-        let tint = (c == .clear) ? Theme.secondary : c
-        Text("\(Theme.stageTitle(stage)) · \(Theme.statusLabel(stage, status))")
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(tint.opacity(0.15), in: Capsule())
-            .foregroundStyle(tint)
+    /// repo · branch · budget, dim — terminal "context" line.
+    @ViewBuilder private func metaLine(_ task: EngTask) -> some View {
+        let bits = metaBits(task)
+        if !bits.isEmpty {
+            Text(bits.joined(separator: "  ·  "))
+                .font(monoSmall).foregroundStyle(.tertiary).textSelection(.enabled)
+        }
     }
 
+    private func metaBits(_ task: EngTask) -> [String] {
+        var bits: [String] = []
+        if let r = task.repo, !r.isEmpty { bits.append(r) }
+        if let b = task.branch, !b.isEmpty { bits.append(b) }
+        if let bud = task.budget, let used = bud.iterationsUsed, let max = bud.maxIterations {
+            bits.append("iter \(used)/\(max)")
+        }
+        return bits
+    }
+
+    // MARK: requirements (plain text, fully shown)
+
+    @ViewBuilder private func requirements(_ task: EngTask) -> some View {
+        if hasRequirements(task) {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("# requirements")
+                if let d = task.description, !d.isEmpty {
+                    Text(d).font(mono).foregroundStyle(.primary).textSelection(.enabled)
+                }
+                if let ac = task.acceptanceCriteria, !ac.isEmpty {
+                    Text("acceptance:").font(monoSmall).foregroundStyle(.secondary).padding(.top, 2)
+                    Text(ac).font(mono).foregroundStyle(.primary).textSelection(.enabled)
+                }
+                if let labels = task.labels, !labels.isEmpty {
+                    Text(labels.map { "#\($0)" }.joined(separator: "  "))
+                        .font(monoSmall).foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private func hasRequirements(_ task: EngTask) -> Bool {
+        !(task.description ?? "").isEmpty
+            || !(task.acceptanceCriteria ?? "").isEmpty
+            || !(task.labels ?? []).isEmpty
+    }
+
+    // MARK: pipeline (7-stage tree, artifacts inline)
+
+    @ViewBuilder private func pipeline(_ task: EngTask) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("# pipeline")
+                .padding(.bottom, 8)
+            ForEach(engStages, id: \.self) { stage in
+                StageBlock(
+                    stage: stage,
+                    status: statusFor(stage, task),
+                    task: task,
+                    mono: mono,
+                    monoSmall: monoSmall
+                )
+            }
+        }
+    }
+
+    // MARK: gates (human-in-the-loop)
+
     @ViewBuilder private func gate(_ task: EngTask) -> some View {
-        Section("Needs you") {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("> needs you", tint: Theme.statusTint(task.status))
             switch "\(task.stage):\(task.status)" {
             case "plan:completed_unapproved":
                 planGate(task)
             case "pr:proposed":
                 prGate(task)
             case "review:comments_received":
-                button("Address review comments", "arrow.uturn.backward", .blue) { await model.addressComments(task); await reload() }
+                actionButton("address review comments", .blue) { await model.addressComments(task); await reload() }
             case "merge:ready":
                 mergeGate(task)
             default:
                 // blocked / deploy:failed / escalated — retry path.
-                VStack(alignment: .leading, spacing: 8) {
-                    if let err = task.lastError { Text(err).font(.caption).foregroundStyle(.red) }
-                    button("Retry", "arrow.clockwise", .orange) { await model.retryTask(task); await reload() }
+                if let err = task.lastError, !err.isEmpty {
+                    Text(err).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
                 }
+                actionButton("retry", .orange) { await model.retryTask(task); await reload() }
             }
         }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Theme.statusTint(task.status).opacity(0.5), lineWidth: 1)
+        )
     }
 
     @ViewBuilder private func planGate(_ task: EngTask) -> some View {
         if editingPlan {
-            TextEditor(text: $planText).frame(minHeight: 240).font(.callout.monospaced())
+            TextEditor(text: $planText)
+                .font(mono)
+                .frame(minHeight: 240)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
         } else {
             Text(planText.isEmpty ? (task.artifacts?.plan?.text ?? "—") : planText)
-                .font(.callout).textSelection(.enabled)
+                .font(mono).foregroundStyle(.primary).textSelection(.enabled)
         }
-        Button(editingPlan ? "Done editing" : "Edit / annotate plan") { editingPlan.toggle() }
-        button("Approve plan — start development", "checkmark.seal.fill", .green) {
+        textButton(editingPlan ? "[ done editing ]" : "[ edit / annotate ]", .secondary) { editingPlan.toggle() }
+        actionButton("approve plan — start dev", .green) {
             await model.approvePlan(task, editedText: planText.isEmpty ? nil : planText); await reload()
         }
-        button("Send back for revision", "arrow.uturn.backward", .orange) {
+        actionButton("send back for revision", .orange) {
             await model.revisePlan(task, note: planText); await reload()
         }
         Text("Approving resumes the same Claude Code session to implement the plan. Nothing merges or deploys without further approval.")
-            .font(.caption2).foregroundStyle(.secondary)
+            .font(monoSmall).foregroundStyle(.secondary)
     }
 
     @ViewBuilder private func prGate(_ task: EngTask) -> some View {
         if let pr = task.artifacts?.pr {
-            Text(pr.title ?? task.title).font(.subheadline.weight(.semibold))
-            if let body = pr.body { Text(body).font(.caption).foregroundStyle(.secondary).lineLimit(8) }
-            if let diff = pr.diffSummary { Text(diff).font(.caption).foregroundStyle(.tertiary) }
+            Text(pr.title ?? task.title)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced)).textSelection(.enabled)
+            if let body = pr.body, !body.isEmpty {
+                Text(body).font(mono).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            if let diff = pr.diffSummary, !diff.isEmpty {
+                Text(diff).font(monoSmall).foregroundStyle(.tertiary).textSelection(.enabled)
+            }
         }
-        button("Approve & open PR", "checkmark.seal.fill", .green) { await model.approvePR(task); await reload() }
-        Text("This opens a public PR on GitHub.").font(.caption2).foregroundStyle(.secondary)
+        actionButton("approve & open PR", .green) { await model.approvePR(task); await reload() }
+        Text("This opens a public PR on GitHub.").font(monoSmall).foregroundStyle(.secondary)
     }
 
     @ViewBuilder private func mergeGate(_ task: EngTask) -> some View {
         if let pr = task.artifacts?.pr, let url = pr.url, let u = URL(string: url) {
-            Button { openURL(u) } label: { Label("Review PR #\(pr.number ?? 0)", systemImage: "arrow.up.right.square") }
+            linkButton("review PR #\(pr.number ?? 0)") { openURL(u) }
         }
-        Button {
-            Task { inFlight = true; await model.approveMerge(task); await reload(); inFlight = false }
-        } label: {
-            Label("Approve merge", systemImage: "arrow.triangle.merge")
-        }
-        .tint(.green)
-        .disabled(inFlight)
+        actionButton("approve merge", .green) { await model.approveMerge(task); await reload() }
         Text("Merging triggers the prod redeploy. This cannot be undone from the app.")
-            .font(.caption2).foregroundStyle(.secondary)
+            .font(monoSmall).foregroundStyle(.secondary)
     }
 
-    @ViewBuilder private func stages(_ task: EngTask) -> some View {
-        Section("Stages") {
-            ForEach(engStages, id: \.self) { stage in
-                StageRow(stage: stage, status: statusFor(stage, task), task: task)
-            }
-        }
-    }
+    // MARK: primary action (start of pipeline)
 
-    @ViewBuilder private func actions(_ task: EngTask) -> some View {
+    @ViewBuilder private func primaryAction(_ task: EngTask) -> some View {
         if task.stage == "plan" && task.status == "not_started" {
-            Section {
-                button("Prepare plan", "wand.and.stars", .blue) { await model.preparePlan(task); await reload() }
-            }
+            actionButton("prepare plan", .blue) { await model.preparePlan(task); await reload() }
         }
     }
 
-    // MARK: helpers
+    // MARK: small terminal UI helpers
 
-    @ViewBuilder private func button(_ title: String, _ icon: String, _ tint: Color, _ run: @escaping () async -> Void) -> some View {
+    @ViewBuilder private func sectionLabel(_ text: String, tint: Color = .secondary) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(tint)
+            .textCase(nil)
+    }
+
+    /// A minimal text "button" styled like a terminal action: `[ approve plan ]`.
+    @ViewBuilder private func actionButton(_ title: String, _ tint: Color, _ run: @escaping () async -> Void) -> some View {
         Button {
             Task { inFlight = true; await run(); inFlight = false }
         } label: {
-            Label(title, systemImage: icon)
+            HStack(spacing: 6) {
+                Text("[ \(title) ]").font(.system(size: 13, weight: .medium, design: .monospaced))
+                if inFlight { ProgressView().controlSize(.mini) }
+            }
+            .foregroundStyle(inFlight ? AnyShapeStyle(.secondary) : AnyShapeStyle(tint))
         }
-        .tint(tint)
+        .buttonStyle(.plain)
         .disabled(inFlight)
     }
+
+    @ViewBuilder private func textButton(_ title: String, _ tint: Color, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Text(title).font(.system(size: 13, design: .monospaced)).foregroundStyle(tint)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private func linkButton(_ title: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            HStack(spacing: 5) {
+                Text("[ \(title) ]").font(.system(size: 13, design: .monospaced))
+                Image(systemName: "arrow.up.right").font(.system(size: 10))
+            }
+            .foregroundStyle(.blue)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: data
 
     private func statusFor(_ stage: String, _ task: EngTask) -> String {
         if stage == task.stage { return task.status }
@@ -210,68 +313,125 @@ struct TaskWorkspaceView: View {
     }
 }
 
-/// One stage in the timeline: a rail dot + name/status, expandable to its artifact.
-private struct StageRow: View {
+/// One stage in the pipeline tree:
+///
+///     plan   ✓ approved
+///       <artifact text, fully shown>
+///
+/// The glyph + key + status form the line; the artifact (plan text, dev summary, test output, PR
+/// link, merge sha, deploy log) is rendered inline beneath it in monospace, indented, never hidden.
+private struct StageBlock: View {
     let stage: String
     let status: String
     let task: EngTask
-    @State private var expanded = false
+    let mono: Font
+    let monoSmall: Font
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            artifact.font(.caption2).foregroundStyle(.secondary)
-        } label: {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Image(systemName: Theme.stageDot(status)).font(.footnote).foregroundStyle(Theme.stageAccent(status))
-                Text(Theme.stageTitle(stage)).font(.subheadline)
-                Spacer(minLength: 4)
-                Text(Theme.statusLabel(stage, status)).font(.caption2).foregroundStyle(Theme.stageAccent(status) == .clear ? Theme.secondary : Theme.stageAccent(status))
+                Text(Theme.stageGlyph(status))
+                    .font(mono)
+                    .foregroundStyle(Theme.statusTint(status))
+                    .frame(width: 10, alignment: .center)
+                Text(Theme.stageKey(stage))
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(status == "not_started" ? Color.secondary : .primary)
+                Text(Theme.statusToken(stage, status))
+                    .font(mono)
+                    .foregroundStyle(Theme.statusTint(status))
+                Spacer(minLength: 0)
             }
+            artifact
+                .padding(.leading, 18)
         }
+        .padding(.vertical, 6)
     }
 
+    /// Per-stage artifact, all content shown in full (long text scrolls with the page).
     @ViewBuilder private var artifact: some View {
         switch stage {
         case "plan":
-            if let p = task.artifacts?.plan { Text(p.text ?? "—").textSelection(.enabled) } else { Text("Not generated yet.") }
+            if let p = task.artifacts?.plan, let text = p.text, !text.isEmpty {
+                bodyText(text)
+                if let rev = p.revision, rev > 0 { dim("rev \(rev)") }
+            } else if status != "not_started" {
+                dim("no plan text")
+            }
         case "dev":
             if let d = task.artifacts?.dev {
-                Text(d.summary ?? "—")
-                if let n = d.filesChanged { Text("\(n) file\(n == 1 ? "" : "s") changed").foregroundStyle(.tertiary) }
-                if let i = d.iterations, i > 1 { Text("↻ \(i) iterations").foregroundStyle(.tertiary) }
-                if let url = d.branchURL, let u = URL(string: url) { Button { openURL(u) } label: { Label("View branch", systemImage: "arrow.up.right.square") } }
-            } else { Text("Not started.") }
+                if let s = d.summary, !s.isEmpty { bodyText(s) }
+                let stats = devStats(d)
+                if !stats.isEmpty { dim(stats.joined(separator: "  ·  ")) }
+                if let url = d.branchURL, let u = URL(string: url) { link("branch", u) }
+            }
         case "test":
             if let t = task.artifacts?.test, let last = t.runs?.last {
-                Label(last.passed == true ? "Passed \(last.total ?? 0)/\(last.total ?? 0)" : "Failed", systemImage: last.passed == true ? "checkmark.circle" : "xmark.circle")
-                    .foregroundStyle(last.passed == true ? .green : .red)
-                if last.passed != true, let s = last.summary { Text(s).font(.caption2.monospaced()).lineLimit(8) }
-            } else { Text("Not run.") }
+                let total = last.total ?? 0
+                let passed = last.passed == true
+                Text(passed ? "passed \(total)/\(total)" : "failed \(last.failed ?? 0)/\(total)")
+                    .font(mono)
+                    .foregroundStyle(passed ? Theme.secondary : Color.red)
+                if !passed, let s = last.summary, !s.isEmpty { bodyText(s, color: .red.opacity(0.9)) }
+            }
         case "pr":
             if let pr = task.artifacts?.pr {
-                Text(pr.title ?? "—")
-                if let url = pr.url, let u = URL(string: url) { Button { openURL(u) } label: { Label("Open PR #\(pr.number ?? 0)", systemImage: "arrow.up.right.square") } }
-                else { Text("Proposed — not yet opened.").foregroundStyle(.tertiary) }
-            } else { Text("No PR yet.") }
+                if let title = pr.title, !title.isEmpty { bodyText(title) }
+                if let diff = pr.diffSummary, !diff.isEmpty { dim(diff) }
+                if let url = pr.url, let u = URL(string: url) { link("PR #\(pr.number ?? 0)", u) }
+                else if status != "not_started" { dim("proposed — not yet opened") }
+            }
         case "review":
             if let r = task.artifacts?.review, let comments = r.comments, !comments.isEmpty {
                 ForEach(comments) { c in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(c.author ?? "reviewer"): \(c.body ?? "")")
-                        if let res = c.resolution { Label(res, systemImage: "checkmark").foregroundStyle(.green).font(.caption2) }
+                            .font(mono).foregroundStyle(.primary).textSelection(.enabled)
+                        if let res = c.resolution, !res.isEmpty {
+                            Text("  ✓ \(res)").font(monoSmall).foregroundStyle(.secondary)
+                        }
                     }
                 }
-            } else { Text("No comments.") }
+            }
         case "merge":
-            if let m = task.artifacts?.merge, let sha = m.commitSha { Text("Merged \(sha)").monospaced() } else { Text("Not merged.") }
+            if let m = task.artifacts?.merge, let sha = m.commitSha, !sha.isEmpty {
+                Text("merged \(sha)").font(mono).foregroundStyle(.secondary).textSelection(.enabled)
+            }
         case "deploy":
             if let dep = task.artifacts?.deploy {
                 Text("\(dep.env ?? "prod"): \(dep.status ?? "—")")
-                if let log = dep.logTail { Text(log).font(.caption2.monospaced()).lineLimit(6) }
-            } else { Text("Not deployed.") }
+                    .font(mono).foregroundStyle(.secondary).textSelection(.enabled)
+                if let log = dep.logTail, !log.isEmpty { bodyText(log) }
+            }
         default:
-            Text("—")
+            EmptyView()
         }
+    }
+
+    private func devStats(_ d: DevArtifact) -> [String] {
+        var stats: [String] = []
+        if let n = d.filesChanged { stats.append("\(n) file\(n == 1 ? "" : "s") changed") }
+        if let i = d.iterations, i > 1 { stats.append("\(i) iterations") }
+        return stats
+    }
+
+    @ViewBuilder private func bodyText(_ s: String, color: Color = .primary) -> some View {
+        Text(s).font(mono).foregroundStyle(color).textSelection(.enabled)
+    }
+
+    @ViewBuilder private func dim(_ s: String) -> some View {
+        Text(s).font(monoSmall).foregroundStyle(.tertiary)
+    }
+
+    @ViewBuilder private func link(_ title: String, _ u: URL) -> some View {
+        Button { openURL(u) } label: {
+            HStack(spacing: 5) {
+                Text("[ \(title) ]").font(mono)
+                Image(systemName: "arrow.up.right").font(.system(size: 10))
+            }
+            .foregroundStyle(.blue)
+        }
+        .buttonStyle(.plain)
     }
 }

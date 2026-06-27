@@ -6,6 +6,14 @@ import UIKit
 enum Theme {
     static let secondary = Color(uiColor: .secondaryLabel)
 
+    /// Surface for the terminal-style engineering views. Near-black in dark (reads like a console),
+    /// a calm near-white neutral in light — follows the system theme rather than fighting it.
+    static let terminalBG = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(white: 0.05, alpha: 1.0)
+            : UIColor.systemBackground
+    })
+
     enum Bucket: String, CaseIterable {
         case overdue, today, upcoming, noDate, awaiting
 
