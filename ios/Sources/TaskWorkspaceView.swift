@@ -28,6 +28,7 @@ struct TaskWorkspaceView: View {
                     HStack { Spacer(); ProgressView(); Spacer() }
                 }
             }
+            .listSectionSpacing(.compact)
             .navigationTitle(task?.jiraKey ?? "Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
@@ -40,24 +41,40 @@ struct TaskWorkspaceView: View {
     // MARK: sections
 
     @ViewBuilder private func requirements(_ task: EngTask) -> some View {
-        Section("Requirements") {
-            Text(task.title).font(.headline)
-            if let d = task.description, !d.isEmpty {
-                Text(d).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            if let ac = task.acceptanceCriteria, !ac.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Acceptance criteria").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Text(ac).font(.callout)
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(task.jiraKey).font(.caption.monospaced().weight(.semibold)).foregroundStyle(.secondary)
+                    stageChip(task.stage, task.status)
+                    Spacer(minLength: 0)
+                    if let url = task.jiraUrl, let u = URL(string: url) {
+                        Button { openURL(u) } label: { Image(systemName: "arrow.up.right.square") }.buttonStyle(.borderless)
+                    }
+                }
+                Text(task.title).font(.subheadline.weight(.semibold))
+                if let d = task.description, !d.isEmpty {
+                    Text(d).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                if let ac = task.acceptanceCriteria, !ac.isEmpty {
+                    Text("Acceptance").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(ac).font(.footnote)
+                }
+                if let labels = task.labels, !labels.isEmpty {
+                    Text(labels.map { "#\($0)" }.joined(separator: "  ")).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
-            if let labels = task.labels, !labels.isEmpty {
-                Text(labels.map { "#\($0)" }.joined(separator: " ")).font(.caption).foregroundStyle(.secondary)
-            }
-            if let url = task.jiraUrl, let u = URL(string: url) {
-                Button { openURL(u) } label: { Label("Open in Jira", systemImage: "arrow.up.right.square") }
-            }
+            .padding(.vertical, 2)
         }
+    }
+
+    @ViewBuilder private func stageChip(_ stage: String, _ status: String) -> some View {
+        let c = Theme.stageAccent(status)
+        let tint = (c == .clear) ? Theme.secondary : c
+        Text("\(Theme.stageTitle(stage)) · \(Theme.statusLabel(stage, status))")
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(tint.opacity(0.15), in: Capsule())
+            .foregroundStyle(tint)
     }
 
     @ViewBuilder private func gate(_ task: EngTask) -> some View {
@@ -203,13 +220,13 @@ private struct StageRow: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            artifact.font(.caption).foregroundStyle(.secondary)
+            artifact.font(.caption2).foregroundStyle(.secondary)
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: Theme.stageDot(status)).foregroundStyle(Theme.stageAccent(status))
-                Text(Theme.stageTitle(stage))
-                Spacer()
-                Text(Theme.statusLabel(stage, status)).font(.caption).foregroundStyle(Theme.stageAccent(status) == .clear ? Theme.secondary : Theme.stageAccent(status))
+            HStack(spacing: 8) {
+                Image(systemName: Theme.stageDot(status)).font(.footnote).foregroundStyle(Theme.stageAccent(status))
+                Text(Theme.stageTitle(stage)).font(.subheadline)
+                Spacer(minLength: 4)
+                Text(Theme.statusLabel(stage, status)).font(.caption2).foregroundStyle(Theme.stageAccent(status) == .clear ? Theme.secondary : Theme.stageAccent(status))
             }
         }
     }
