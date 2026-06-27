@@ -1,8 +1,15 @@
 import SwiftUI
 
-/// Renders markdown source as clean, readable monospaced text — no raw `#`, `**`, backticks or
-/// `-` bullets shown literally. Headings become bold lines, `**bold**`/`*italic*`/`` `code` `` render
-/// inline, list items get a `•`, blockquotes a `┃`. Fenced ``` blocks are shown verbatim as code.
+/// Renders markdown source as clean, readable, COLOR-coded monospaced text — no raw `#`, `**`,
+/// backticks, `-` bullets, `---` rules or `| tables |` shown literally.
+///
+/// - Headings → bold, colored (Theme.mdHeading)
+/// - **bold** → Theme.mdStrong, *italic* → italic, `code` → Theme.mdCode
+/// - `- / * / 1.` lists → `•` bullets (dim marker)
+/// - `> quote` → `┃` bar, secondary text
+/// - `---` → a thin divider rule
+/// - `| a | b |` tables → aligned rows in a faint code block
+/// - ``` fences → verbatim code block (warm, boxed)
 ///
 /// Pure presentation: parses line-by-line so any odd backend text degrades to plain text rather than
 /// failing. Long content wraps and scrolls with the parent (nothing truncated).
@@ -12,7 +19,7 @@ struct MarkdownText: View {
     var color: Color = .primary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 block.view(size: size, color: color)
             }
@@ -23,68 +30,117 @@ struct MarkdownText: View {
 
     private var blocks: [Block] { Self.parse(source) }
 
-    // MARK: parsing
+    // MARK: blocks
 
     private enum Block {
         case heading(String, level: Int)
         case bullet(String)
         case quote(String)
         case code(String)          // a fenced ``` block, shown verbatim
+        case table([[String]])     // rows of cells (header row first)
+        case rule
         case paragraph(String)
         case spacer
 
         @ViewBuilder func view(size: CGFloat, color: Color) -> some View {
             switch self {
             case let .heading(t, level):
-                inline(t, size: level <= 1 ? size + 2 : size + 1, weight: .bold, color: color)
-                    .padding(.top, 4)
+                MarkdownText.inlineText(t, base: Theme.mdHeading)
+                    .font(.system(size: level <= 1 ? size + 2 : size + 1, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Theme.mdHeading)
+                    .padding(.top, 5)
             case let .bullet(t):
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("•").font(.system(size: size, design: .monospaced)).foregroundStyle(.secondary)
-                    inline(t, size: size, weight: .regular, color: color)
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text("•").font(.system(size: size, design: .monospaced)).foregroundStyle(Theme.headerAccent)
+                    MarkdownText.inlineText(t, base: color)
+                        .font(.system(size: size, design: .monospaced))
+                        .foregroundStyle(color)
                 }
                 .padding(.leading, 4)
             case let .quote(t):
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("┃").font(.system(size: size, design: .monospaced)).foregroundStyle(.secondary)
-                    inline(t, size: size, weight: .regular, color: .secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Rectangle().fill(Theme.headerAccent.opacity(0.6)).frame(width: 2)
+                    MarkdownText.inlineText(t, base: .secondary)
+                        .font(.system(size: size, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
+                .fixedSize(horizontal: false, vertical: true)
             case let .code(t):
                 Text(t)
                     .font(.system(size: size - 1, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
+                    .foregroundStyle(Theme.mdCode)
+                    .padding(9)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
+                    .background(Theme.mdCode.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+            case let .table(rows):
+                tableView(rows, size: size)
+            case .rule:
+                Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1).padding(.vertical, 4)
             case let .paragraph(t):
-                inline(t, size: size, weight: .regular, color: color)
+                MarkdownText.inlineText(t, base: color)
+                    .font(.system(size: size, design: .monospaced))
+                    .foregroundStyle(color)
             case .spacer:
                 Color.clear.frame(height: 4)
             }
         }
 
-        /// Render one line's inline spans (`**bold**`, `*italic*`, `` `code` ``) as styled mono text.
-        @ViewBuilder private func inline(_ line: String, size: CGFloat, weight: Font.Weight, color: Color) -> some View {
-            MarkdownText.inlineText(line)
-                .font(.system(size: size, weight: weight, design: .monospaced))
-                .foregroundStyle(color)
+        /// A markdown table → monospaced, padded columns inside a faint box. Header row in heading
+        /// color. Cells are stripped of inline markers (`` ` ``, `**`) so nothing raw shows and the
+        /// column widths align on the cleaned text.
+        @ViewBuilder private func tableView(_ rows: [[String]], size: CGFloat) -> some View {
+            let clean = rows.map { $0.map(MarkdownText.plainInline) }
+            let cols = clean.map(\.count).max() ?? 0
+            let widths: [Int] = (0..<cols).map { c in
+                clean.map { c < $0.count ? $0[c].count : 0 }.max() ?? 0
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(clean.enumerated()), id: \.offset) { idx, row in
+                    let line = (0..<cols).map { c -> String in
+                        let cell = c < row.count ? row[c] : ""
+                        return cell.padding(toLength: max(widths[c], cell.count), withPad: " ", startingAt: 0)
+                    }.joined(separator: "  ")
+                    Text(line)
+                        .font(.system(size: size - 1, weight: idx == 0 ? .bold : .regular, design: .monospaced))
+                        .foregroundStyle(idx == 0 ? Theme.mdHeading : Color.primary)
+                }
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 5))
         }
     }
 
-    /// Build an inline-styled `Text` from a single line, stripping `**`, `*`/`_`, and `` ` ``.
-    static func inlineText(_ line: String) -> Text {
+    /// Strip inline markers to a plain string (used for table cells / width measurement).
+    nonisolated static func plainInline(_ line: String) -> String {
+        var out = ""
+        var rest = Substring(line)
+        while let token = nextToken(in: rest) {
+            out += String(token.before)
+            out += token.content
+            rest = token.after
+        }
+        out += rest
+        return out
+    }
+
+    // MARK: inline spans
+
+    /// Build an inline-styled, colored `Text` from a single line. `**bold**` → mdStrong, `` `code` ``
+    /// → mdCode, `*italic*` → italic. `base` is the surrounding text color (so plain runs match).
+    static func inlineText(_ line: String, base: Color) -> Text {
         var result = Text("")
         var rest = Substring(line)
         while let token = nextToken(in: rest) {
-            if !token.before.isEmpty { result = result + Text(String(token.before)) }
+            if !token.before.isEmpty { result = result + Text(String(token.before)).foregroundColor(base) }
             switch token.style {
-            case .bold:   result = result + Text(token.content).bold()
-            case .italic: result = result + Text(token.content).italic()
-            case .code:   result = result + Text(token.content).font(.system(.body, design: .monospaced))
+            case .bold:   result = result + Text(token.content).bold().foregroundColor(Theme.mdStrong)
+            case .italic: result = result + Text(token.content).italic().foregroundColor(base)
+            case .code:   result = result + Text(token.content).foregroundColor(Theme.mdCode)
             }
             rest = token.after
         }
-        if !rest.isEmpty { result = result + Text(String(rest)) }
+        if !rest.isEmpty { result = result + Text(String(rest)).foregroundColor(base) }
         return result
     }
 
@@ -92,7 +148,7 @@ struct MarkdownText: View {
     private struct Token { let before: Substring; let style: Style; let content: String; let after: Substring }
 
     /// Find the first `**…**`, `*…*`/`_…_`, or `` `…` `` span; nil when none remain.
-    private static func nextToken(in s: Substring) -> Token? {
+    nonisolated private static func nextToken(in s: Substring) -> Token? {
         let markers: [(open: String, close: String, style: Style)] = [
             ("**", "**", .bold), ("__", "__", .bold),
             ("`", "`", .code),
@@ -117,7 +173,9 @@ struct MarkdownText: View {
                      content: b.content, after: s[b.range.upperBound...])
     }
 
-    /// Split source into blocks, pulling out fenced code and classifying each line.
+    // MARK: block parsing
+
+    /// Split source into blocks: fenced code, tables, rules, headings, lists, quotes, paragraphs.
     private static func parse(_ source: String) -> [Block] {
         var blocks: [Block] = []
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
@@ -138,8 +196,22 @@ struct MarkdownText: View {
                 continue
             }
 
+            // table: a run of lines that look like `| a | b |`
+            if isTableRow(trimmed) {
+                var rows: [[String]] = []
+                while i < lines.count, isTableRow(lines[i].trimmingCharacters(in: .whitespaces)) {
+                    let cells = tableCells(lines[i].trimmingCharacters(in: .whitespaces))
+                    if !isTableSeparator(cells) { rows.append(cells) }
+                    i += 1
+                }
+                if !rows.isEmpty { blocks.append(.table(rows)) }
+                continue
+            }
+
             if trimmed.isEmpty {
                 blocks.append(.spacer)
+            } else if isRule(trimmed) {
+                blocks.append(.rule)
             } else if trimmed.hasPrefix("#") {
                 let hashes = trimmed.prefix { $0 == "#" }.count
                 blocks.append(.heading(strip(trimmed.dropFirst(hashes)), level: hashes))
@@ -159,6 +231,32 @@ struct MarkdownText: View {
         }
     }
 
+    /// `---` / `***` / `___` (3+ of the same) → horizontal rule.
+    private static func isRule(_ line: String) -> Bool {
+        guard line.count >= 3 else { return false }
+        for ch in ["-", "*", "_"] where line.allSatisfy({ String($0) == ch }) { return true }
+        return false
+    }
+
+    private static func isTableRow(_ line: String) -> Bool {
+        line.hasPrefix("|") && line.dropFirst().contains("|")
+    }
+
+    /// "| a | b |" → ["a", "b"] (trimmed, outer pipes removed).
+    private static func tableCells(_ line: String) -> [String] {
+        var s = Substring(line)
+        if s.hasPrefix("|") { s = s.dropFirst() }
+        if s.hasSuffix("|") { s = s.dropLast() }
+        return s.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// A `|---|:--:|` alignment row — drop it from rendered rows.
+    private static func isTableSeparator(_ cells: [String]) -> Bool {
+        !cells.isEmpty && cells.allSatisfy { c in
+            !c.isEmpty && c.allSatisfy { $0 == "-" || $0 == ":" || $0 == " " }
+        }
+    }
+
     /// `- x` / `* x` / `+ x` / `1. x` → "x" (the bullet content); nil when not a list item.
     private static func bulletContent(_ line: String) -> String? {
         for p in ["- ", "* ", "+ "] where line.hasPrefix(p) {
@@ -174,7 +272,6 @@ struct MarkdownText: View {
         return nil
     }
 
-    /// Trim and drop a stray trailing/leading whitespace from a heading/line fragment.
     private static func strip(_ s: Substring) -> String {
         s.trimmingCharacters(in: .whitespaces)
     }
