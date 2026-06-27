@@ -31,6 +31,7 @@ struct TaskWorkspaceView: View {
                 if let task {
                     VStack(alignment: .leading, spacing: 18) {
                         header(task)
+                        if task.isRunning { stopAction(task) }
                         if task.needsAction { gate(task) }
                         primaryAction(task)
                         requirements(task)
@@ -236,6 +237,12 @@ struct TaskWorkspaceView: View {
         actionButton("approve merge", .green) { await model.approveMerge(task); await reload() }
         Text("Merging triggers the prod redeploy. This cannot be undone from the app.")
             .font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    // MARK: stop action (visible while a stage is running)
+
+    @ViewBuilder private func stopAction(_ task: EngTask) -> some View {
+        actionButton("stop", .orange) { await model.cancelTask(task); await reload() }
     }
 
     // MARK: primary action (start of pipeline)

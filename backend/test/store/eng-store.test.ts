@@ -213,3 +213,34 @@ describe("EngStore: agent runs", () => {
     expect(store.agentRuns(id).find((r) => r.stage === "dev")?.status).toBe("aborted");
   });
 });
+
+describe("EngStore: cancel pending", () => {
+  let store: EngStore;
+  let id: string;
+  beforeEach(() => {
+    store = new EngStore(":memory:");
+    store.upsertFromJira([input()], NOW);
+    id = taskId("LK-1");
+  });
+
+  it("cancel_pending defaults to false and toggles via set/is", () => {
+    expect(store.isTaskCancelPending(id)).toBe(false);
+    store.setCancelPending(id, NOW);
+    expect(store.isTaskCancelPending(id)).toBe(true);
+  });
+
+  it("raiseBudget clears the cancel_pending flag", () => {
+    store.setCancelPending(id, NOW);
+    expect(store.isTaskCancelPending(id)).toBe(true);
+    store.raiseBudget(id, { maxIterations: 10 }, NOW);
+    expect(store.isTaskCancelPending(id)).toBe(false);
+  });
+
+  it("setCancelPending returns false for unknown taskId", () => {
+    expect(store.setCancelPending("unknown", NOW)).toBe(false);
+  });
+
+  it("isTaskCancelPending returns false for unknown taskId", () => {
+    expect(store.isTaskCancelPending("unknown")).toBe(false);
+  });
+});

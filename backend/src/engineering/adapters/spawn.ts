@@ -16,6 +16,12 @@ export interface SpawnOpts {
   input?: string;
   /** Called per stdout line (for NDJSON streaming). */
   onLine?: (line: string) => void;
+  /**
+   * Called once the child is spawned, with a function that sends SIGTERM to the whole process
+   * group then SIGKILL after 5 s. Used by the worker cancel-watcher. Only meaningful when the
+   * process is spawned detached (which we do when this callback is provided).
+   */
+  onKillable?: (kill: () => void) => void;
 }
 
 /**
@@ -28,7 +34,20 @@ export function runProcess(cmd: string, args: readonly string[], opts: SpawnOpts
       cwd: opts.cwd,
       env: opts.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
+      // detached gives the child its own process group so we can kill the whole tree via -pid.
+      detached: opts.onKillable !== undefined,
     });
+
+    if (opts.onKillable) {
+      opts.onKillable(() => {
+        const pid = child.pid;
+        if (pid === undefined) return;
+        try { process.kill(-pid, "SIGTERM"); } catch { /* already dead */ }
+        setTimeout(() => {
+          try { process.kill(-pid, "SIGKILL"); } catch { /* already dead */ }
+        }, 5_000).unref();
+      });
+    }
     let stdout = "";
     let stderr = "";
     let timedOut = false;
