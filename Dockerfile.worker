@@ -1,0 +1,42 @@
+# Loopkeeper engineering WORKER — runs Claude Code headless + git/gh + the build toolchain.
+# Separate from the api image (keeps `claude`/`gh` out of the internet-facing service and isolates
+# a runaway build from the api). Shares eng.db on the lk_data volume; no inbound ports.
+ARG CLAUDE_CODE_VERSION=2.1.158
+FROM node:22-bookworm-slim
+ARG CLAUDE_CODE_VERSION
+
+WORKDIR /app
+
+# git (clone/worktree/push), openssh-client (SSH redeploy), gh (PR helpers), build toolchain
+# (better-sqlite3 native + running pnpm install/vitest inside task worktrees), and the pinned
+# Claude Code CLI (pinned so plan/dev/review behavior is reproducible).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates git openssh-client curl gnupg \
+  && mkdir -p -m 755 /etc/apt/keyrings \
+  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update && apt-get install -y --no-install-recommends gh \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable \
+  && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+  && claude --version
+
+# Deps first for layer caching.
+COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY pnpm-lock.yaml* ./
+COPY backend/package.json ./backend/
+RUN pnpm install --no-frozen-lockfile
+
+COPY backend ./backend
+RUN pnpm --filter @loopkeeper/backend build
+
+ENV LOOPKEEPER_DATA_DIR=/data \
+    LOOPKEEPER_TZ=Asia/Kolkata \
+    ENG_DB_PATH=/data/eng.db \
+    ENG_WORKTREE_ROOT=/workspace/worktrees \
+    ENG_AGENT_LOG_DIR=/data/eng/agent-logs \
+    CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
+
+VOLUME ["/data", "/workspace"]
+CMD ["node", "backend/dist/worker/worker.mjs"]

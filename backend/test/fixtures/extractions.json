@@ -1,0 +1,87 @@
+{
+  "C1:1719300000.0001": [
+    {
+      "direction": "owe",
+      "kind": "request",
+      "summary": "Review the RFC for Priya",
+      "counterpart": "Priya",
+      "commitmentSpan": "can you review the RFC by Friday",
+      "duePhrase": "by Friday",
+      "firmness": "firm"
+    },
+    {
+      "direction": "owe",
+      "kind": "request",
+      "summary": "Send Priya the Q2 numbers",
+      "counterpart": "Priya",
+      "commitmentSpan": "send me the Q2 numbers when you get a chance",
+      "duePhrase": "when you get a chance",
+      "firmness": "tentative"
+    }
+  ],
+  "C2:1719300100.0002": [
+    {
+      "direction": "owe",
+      "kind": "commitment",
+      "summary": "Send Anil the deck",
+      "counterpart": "Anil",
+      "commitmentSpan": "I'll send the deck to Anil by EOD tomorrow",
+      "duePhrase": "by EOD tomorrow",
+      "firmness": "firm"
+    }
+  ],
+  "T100:M1": [
+    {
+      "direction": "owe",
+      "kind": "action_item",
+      "summary": "Complete the mandatory security training",
+      "counterpart": "HR Team",
+      "commitmentSpan": "complete the mandatory security training before 30 June 2026",
+      "duePhrase": "before 30 June 2026",
+      "firmness": "firm"
+    }
+  ],
+  "C3:1719300400.0005": [
+    {
+      "direction": "owe",
+      "kind": "commitment",
+      "summary": "Send the report",
+      "counterpart": "Sam",
+      "commitmentSpan": "main kal report bhej dunga",
+      "duePhrase": "kal",
+      "firmness": "firm"
+    }
+  ],
+  "T200:M1": [],
+  "C4:1719300600.0007": [
+    {
+      "direction": "owe",
+      "kind": "action_item",
+      "summary": "Write the postmortem doc",
+      "counterpart": "Boss",
+      "commitmentSpan": "We need the postmortem doc before the release",
+      "duePhrase": "before the release",
+      "firmness": "firm"
+    }
+  ],
+  "T300:M1": [
+    {
+      "direction": "owe",
+      "kind": "commitment",
+      "summary": "Send the signed contract",
+      "counterpart": "legal",
+      "commitmentSpan": "I'll send the signed contract today",
+      "duePhrase": "today",
+      "firmness": "firm"
+    },
+    {
+      "direction": "owe",
+      "kind": "commitment",
+      "summary": "Follow up with legal",
+      "counterpart": "legal",
+      "commitmentSpan": "I'll follow up with legal next week",
+      "duePhrase": "next week",
+      "firmness": "firm"
+    }
+  ]
+}

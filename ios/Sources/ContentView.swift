@@ -1,0 +1,340 @@
+import SwiftUI
+
+struct ContentView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
+    @AppStorage("loopkeeper.sortByPriority") private var sortByPriority = false
+    @State private var selected: OpenLoop?
+    @State private var selectedTask: EngTask?
+    @State private var searchText = ""
+    @State private var searchResults: [OpenLoop] = []
+    @State private var showStandup = false
+    @State private var showShutdown = false
+    @State private var showArchive = false
+    @State private var showInsights = false
+    @State private var showPeople = false
+    @State private var showWeekly = false
+    @State private var showBragDoc = false
+
+    var body: some View {
+        @Bindable var model = model
+        NavigationStack {
+            VStack(spacing: 0) {
+                warningBanner
+                overcommitBanner
+                content
+                    .refreshable { await model.refresh() }
+                    .task { await model.refresh() }
+                    .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search loops")
+                    .onChange(of: searchText) { _, q in
+                        Task { searchResults = q.trimmingCharacters(in: .whitespaces).isEmpty ? [] : await model.search(q) }
+                    }
+                    .sheet(item: $selected) { LoopDetailView(loop: $0) }
+                    .sheet(item: $selectedTask) { TaskWorkspaceView(taskID: $0.id) }
+                    .sheet(isPresented: $showStandup) { StandupView() }
+                    .sheet(isPresented: $showShutdown) { ShutdownView() }
+                    .sheet(isPresented: $showArchive) { ArchiveView() }
+                    .sheet(isPresented: $showInsights) { InsightsView() }
+                    .sheet(isPresented: $showPeople) { PeopleView() }
+                    .sheet(isPresented: $showWeekly) { WeeklyReviewView() }
+                    .sheet(isPresented: $showBragDoc) { BragDocView() }
+                    .onReceive(NotificationCenter.default.publisher(for: .loopkeeperDidMutate)) { _ in
+                        Task { await model.refresh() }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .loopkeeperOpenTask)) { note in
+                        if let id = note.userInfo?["taskId"] as? String {
+                            Task { await model.refreshTasks(); selectedTask = model.engineeringTasks.first { $0.id == id } }
+                        }
+                    }
+                    .alert(
+                        "Something went wrong",
+                        isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })
+                    ) {
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text(model.errorMessage ?? "")
+                    }
+            }
+            .navigationTitle("Loopkeeper")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { Task { await model.scan() } } label: {
+                        if model.isScanning { ProgressView() } else { Image(systemName: "arrow.triangle.2.circlepath") }
+                    }
+                    .disabled(model.isScanning)
+                }
+                ToolbarItem(placement: .topBarTrailing) { actionsMenu }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    undoToast
+                    freshnessBar
+                }
+                .animation(.spring(duration: 0.3), value: model.lastActionLabel)
+            }
+        }
+    }
+
+    @ViewBuilder private var undoToast: some View {
+        if let label = model.lastActionLabel {
+            HStack(spacing: 12) {
+                Text(label).font(.subheadline)
+                Spacer()
+                Button("Undo") { Task { await model.undo() } }.font(.subheadline.weight(.semibold))
+                Button { model.lastActionLabel = nil } label: { Image(systemName: "xmark") }
+                    .foregroundStyle(.secondary).accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .padding(.horizontal)
+            .padding(.bottom, 6)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private var actionsMenu: some View {
+        Menu {
+            Picker("Sort", selection: $sortByPriority) {
+                Label("By date", systemImage: "calendar").tag(false)
+                Label("By priority", systemImage: "exclamationmark.triangle").tag(true)
+            }
+            Divider()
+            Button { showInsights = true } label: { Label("Insights", systemImage: "chart.bar") }
+            Button { showPeople = true } label: { Label("People", systemImage: "person.2") }
+            Divider()
+            Button { showStandup = true } label: { Label("Standup roll-up", systemImage: "text.append") }
+            Button { showWeekly = true } label: { Label("Weekly review", systemImage: "calendar.badge.clock") }
+            Button { showShutdown = true } label: { Label("Wind down", systemImage: "moon.zzz") }
+            Divider()
+            Button { showArchive = true } label: { Label("Completed", systemImage: "checkmark.circle") }
+            Button { showBragDoc = true } label: { Label("Brag doc", systemImage: "rosette") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+    }
+
+    // MARK: content states
+
+    @ViewBuilder private var content: some View {
+        if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+            searchList
+        } else if !model.isEmpty || !model.engineeringTasks.isEmpty {
+            briefList
+        } else if model.isLoading {
+            ProgressView(model.isScanning ? "Scanning for new commitments…" : "Loading your loops…")
+        } else if !model.hasConnections {
+            OnboardingView()
+        } else {
+            ContentUnavailableView(
+                "Nothing slips",
+                systemImage: "checkmark.circle",
+                description: Text("You're all caught up. Pull to refresh, or tap ↻ to scan for new commitments.")
+            )
+        }
+    }
+
+    private var searchList: some View {
+        List {
+            if searchResults.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            } else {
+                Section("Results") { ForEach(searchResults) { row($0) } }
+            }
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    private var briefList: some View {
+        List {
+            if !focusNow.isEmpty {
+                Section {
+                    ForEach(focusNow) { row($0) }
+                } header: {
+                    Label("Focus now", systemImage: "scope").textCase(nil)
+                }
+            }
+            if !model.engineeringTasks.isEmpty {
+                Section {
+                    ForEach(model.sortedTasks) { task in
+                        JiraTaskRow(task: task)
+                            .contentShape(Rectangle())
+                            .onTapGesture { Haptics.tap(); selectedTask = task }
+                    }
+                } header: {
+                    HStack {
+                        Label("My Jira Tasks", systemImage: "hammer").textCase(nil)
+                        Spacer()
+                        if model.tasksNeedingAction > 0 {
+                            Text("\(model.tasksNeedingAction)")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Color.orange, in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                }
+            }
+            if let brief = model.brief {
+                section(.overdue, sorted(brief.overdue))
+                section(.today, sorted(brief.today))
+                section(.upcoming, sorted(brief.upcoming))
+                section(.noDate, sorted(brief.noDate))
+                section(.awaiting, sorted(brief.awaiting))
+            }
+        }
+        .listStyle(.insetGrouped)
+        .animation(.default, value: model.brief?.date)
+    }
+
+    /// The top 3 owe-loops by priority across overdue/today/upcoming — the morning's first answer.
+    private var focusNow: [OpenLoop] {
+        guard let brief = model.brief else { return [] }
+        return (brief.overdue + brief.today + brief.upcoming)
+            .sorted { $0.priorityScore > $1.priorityScore }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    @ViewBuilder
+    private func section(_ bucket: Theme.Bucket, _ loops: [OpenLoop]) -> some View {
+        if !loops.isEmpty {
+            Section {
+                ForEach(loops) { row($0) }
+            } header: {
+                sectionHeader(bucket, loops)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ loop: OpenLoop) -> some View {
+        LoopRow(loop: loop)
+            .contentShape(Rectangle())
+            .onTapGesture { Haptics.tap(); selected = loop }
+            .swipeActions(edge: .trailing) {
+                Button { Task { await model.markDone(loop) } } label: { Label("Done", systemImage: "checkmark") }.tint(.green)
+                Button { Task { await model.snooze(loop, days: 1) } } label: { Label("Snooze", systemImage: "clock") }.tint(.orange)
+            }
+            .swipeActions(edge: .leading) {
+                Button(role: .destructive) { Task { await model.dismiss(loop) } } label: { Label("Dismiss", systemImage: "trash") }
+            }
+            .contextMenu { rowMenu(loop) }
+    }
+
+    @ViewBuilder
+    private func sectionHeader(_ bucket: Theme.Bucket, _ loops: [OpenLoop]) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bucket.title)
+                if let sub = bucket.subtitle {
+                    Text(sub).font(.caption2).foregroundStyle(.secondary).textCase(nil)
+                }
+            }
+            Spacer()
+            if bucket == .overdue || bucket == .today {
+                Menu {
+                    Button("Tomorrow") { Task { await model.snoozeAll(loops, days: 1) } }
+                    Button("In 3 days") { Task { await model.snoozeAll(loops, days: 3) } }
+                    Button("Next week") { Task { await model.snoozeAll(loops, days: 7) } }
+                } label: {
+                    Text("Snooze all").font(.caption).textCase(nil)
+                }
+            }
+            Text("\(loops.count)").foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ loop: OpenLoop) -> some View {
+        Button { Task { await model.markDone(loop) } } label: { Label("Mark done", systemImage: "checkmark.circle") }
+        Menu {
+            Button("Tomorrow") { Task { await model.snooze(loop, days: 1) } }
+            Button("In 3 days") { Task { await model.snooze(loop, days: 3) } }
+            Button("Next week") { Task { await model.snooze(loop, days: 7) } }
+        } label: {
+            Label("Snooze", systemImage: "clock")
+        }
+        if loop.sourceWebURL != nil {
+            Button { openLoopSource(loop, using: openURL) } label: { Label("View in \(Theme.channelLabel(loop.channel))", systemImage: "arrow.up.right.square") }
+        }
+        Divider()
+        Button(role: .destructive) { Task { await model.dismiss(loop) } } label: { Label("Dismiss", systemImage: "trash") }
+    }
+
+    // MARK: banners + freshness
+
+    @ViewBuilder private var warningBanner: some View {
+        if !model.scanWarnings.isEmpty {
+            let critical = model.scanWarnings.contains { $0.localizedCaseInsensitiveContains("unavailable") || $0.localizedCaseInsensitiveContains("failed") }
+            let tint = critical ? Color.red : Color.orange
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(model.scanWarnings, id: \.self) { warning in
+                        Label {
+                            Text(warning).font(.footnote).foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(tint)
+                        }
+                    }
+                }
+                Spacer(minLength: 4)
+                Button { model.scanWarnings = [] } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Dismiss warning")
+            }
+            .padding(12)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal)
+            .padding(.top, 8)
+        }
+    }
+
+    /// A protective nudge when too many firm commitments land overdue/today.
+    @ViewBuilder private var overcommitBanner: some View {
+        if heavyDayCount > 5, searchText.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "gauge.with.dots.needle.67percent").foregroundStyle(.orange)
+                Text("Heavy day: \(heavyDayCount) firm commitments due. Consider snoozing the low-priority ones.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal)
+            .padding(.top, 8)
+        }
+    }
+
+    private var heavyDayCount: Int {
+        guard let brief = model.brief else { return 0 }
+        return (brief.overdue + brief.today).filter(\.isFirm).count
+    }
+
+    @ViewBuilder private var freshnessBar: some View {
+        if let updated = model.lastUpdated, !model.isEmpty {
+            Text("Updated \(updated, style: .time)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(.bar)
+        }
+    }
+
+    /// Sort a bucket by the active mode: priority score (desc) or due date (asc, undated last).
+    private func sorted(_ loops: [OpenLoop]) -> [OpenLoop] {
+        if sortByPriority { return loops.sorted { $0.priorityScore > $1.priorityScore } }
+        return loops.sorted { a, b in
+            switch (a.dueDate, b.dueDate) {
+            case let (x?, y?): return x < y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return false
+            }
+        }
+    }
+}

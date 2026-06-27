@@ -1,0 +1,101 @@
+[
+  {
+    "channel": "slack",
+    "tenant": "T_PERSONAL",
+    "sourceRef": "C1:1719300000.0001",
+    "permalink": "https://slack.example/archives/C1/p1719300000",
+    "author": "Priya",
+    "fromMe": false,
+    "timestamp": "2026-06-24T11:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "Hey, can you review the RFC by Friday? Also pls send me the Q2 numbers when you get a chance."
+  },
+  {
+    "channel": "slack",
+    "tenant": "T_PERSONAL",
+    "sourceRef": "C2:1719300100.0002",
+    "permalink": "https://slack.example/archives/C2/p1719300100",
+    "author": "Karna",
+    "fromMe": true,
+    "timestamp": "2026-06-24T11:05:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "Sure, I'll send the deck to Anil by EOD tomorrow."
+  },
+  {
+    "channel": "gmail",
+    "tenant": "karna.personal@example.com",
+    "sourceRef": "T100:M1",
+    "permalink": "https://mail.example/T100",
+    "author": "HR Team",
+    "fromMe": false,
+    "timestamp": "2026-06-23T09:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "Reminder: please complete the mandatory security training before 30 June 2026."
+  },
+  {
+    "channel": "slack",
+    "tenant": "T_PERSONAL",
+    "sourceRef": "C3:1719300300.0004",
+    "permalink": "https://slack.example/archives/C3/p1719300300",
+    "author": "Sam",
+    "fromMe": false,
+    "timestamp": "2026-06-24T12:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "lunch?"
+  },
+  {
+    "channel": "slack",
+    "tenant": "T_PERSONAL",
+    "sourceRef": "C3:1719300400.0005",
+    "permalink": "https://slack.example/archives/C3/p1719300400",
+    "author": "Karna",
+    "fromMe": true,
+    "timestamp": "2026-06-24T12:10:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "haan main kal report bhej dunga"
+  },
+  {
+    "channel": "gmail",
+    "tenant": "karna.personal@example.com",
+    "sourceRef": "T200:M1",
+    "permalink": "https://mail.example/T200",
+    "author": "Vendor Billing",
+    "fromMe": false,
+    "timestamp": "2026-06-22T15:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "Please find attached the invoice. Let me know if you have any questions."
+  },
+  {
+    "channel": "slack",
+    "tenant": "T_WORK",
+    "sourceRef": "C4:1719300600.0007",
+    "permalink": "https://slack.example/archives/C4/p1719300600",
+    "author": "Boss",
+    "fromMe": false,
+    "timestamp": "2026-06-24T13:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "We need the postmortem doc before the release."
+  },
+  {
+    "channel": "gmail",
+    "tenant": "karna.personal@example.com",
+    "sourceRef": "T300:M1",
+    "permalink": "https://mail.example/T300",
+    "author": "Karna",
+    "fromMe": true,
+    "timestamp": "2026-06-24T14:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "I'll send the signed contract today and I'll follow up with legal next week."
+  },
+  {
+    "channel": "slack",
+    "tenant": "T_PERSONAL",
+    "sourceRef": "C6:1719300900.0010",
+    "permalink": "https://slack.example/archives/C6/p1719300900",
+    "author": "Dana",
+    "fromMe": false,
+    "timestamp": "2026-06-24T15:00:00+05:30",
+    "sourceTimezone": "Asia/Kolkata",
+    "text": "thanks, looks good!"
+  }
+]

@@ -1,0 +1,5 @@
+# Auto-HTTPS for the sslip.io host (LK_HOST), reverse-proxied to the app container.
+# Caddy obtains + renews a real Let's Encrypt cert automatically — no domain needed.
+{$LK_HOST} {
+	reverse_proxy loopkeeper:8080
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@loopkeeper/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/index.mjs",
+  "bin": {
+    "loopkeeper-phase0": "./dist/phase0.mjs"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint src test",
+    "phase0": "node --experimental-strip-types src/phase0.ts",
+    "seed": "node --experimental-strip-types src/seed.ts",
+    "dev": "node --experimental-strip-types --watch src/server/server.ts",
+    "start": "node dist/server/server.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^5.8.5",
+    "openai": "^6.45.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.0.1",
+    "oxlint": "^1.71.0",
+    "tsdown": "^0.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

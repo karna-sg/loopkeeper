@@ -1,0 +1,40 @@
+# Fly.io deploy for the Loopkeeper backend.
+#   fly launch --no-deploy --copy-config --name loopkeeper-backend --region bom
+#   fly volumes create loopkeeper_data --size 1 --region bom
+#   fly secrets set LOOPKEEPER_API_TOKEN=... OPENAI_API_KEY=... \
+#                   SLACK_CLIENT_ID=... SLACK_CLIENT_SECRET=... \
+#                   GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... \
+#                   LOOPKEEPER_PUBLIC_URL=https://<app>.fly.dev
+#   fly deploy
+app = "loopkeeper-backend"
+primary_region = "bom"   # Mumbai — closest Fly region for IST
+
+[build]
+
+[env]
+  PORT = "8080"
+  LOOPKEEPER_TZ = "Asia/Kolkata"
+  LOOPKEEPER_DATA_DIR = "/data"
+  LOOPKEEPER_SCAN_EVERY_MIN = "120"
+  # Free Apple ID = no APNs; nudges are on-device (local notifications). Set >0 only with a paid APNs key.
+  LOOPKEEPER_NUDGE_EVERY_MIN = "0"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep one machine always running so scans/nudges fire 24/7.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "loopkeeper_data"
+  destination = "/data"
+
+[checks.health]
+  type = "http"
+  port = 8080
+  method = "get"
+  path = "/healthz"
+  interval = "30s"
+  timeout = "5s"

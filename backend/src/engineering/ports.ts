@@ -1,0 +1,107 @@
+/**
+ * The orchestrator's "ports" — the external effects it depends on, behind interfaces so the whole
+ * stage machine (budget caps, escalation, gate enforcement, lifecycle advancement) is unit-testable
+ * with fakes (mirrors the existing `FakePushSender` / `fake-source.ts` pattern). The real adapters
+ * (Claude Code, git, GitHub REST, SSH deploy) implement these; tests substitute scripted fakes.
+ */
+import type { EngTask, ReviewComment, Stage } from "../domain/eng-task.ts";
+
+export interface AgentRunResult {
+  ok: boolean;
+  /** The session id the run used (assigned, or a fresh one on cold-start). */
+  sessionId: string;
+  /** Final assistant text — the plan (plan stage) or change summary (execute stage). Redacted. */
+  finalText: string;
+  usdCents: number;
+  numTurns: number | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  error?: string;
+}
+
+export interface AgentRunArgs {
+  taskId: string;
+  stage: Stage;
+  /** Assigned up front (deterministic, crash-proof). The runner cold-starts if resume fails. */
+  sessionId: string;
+  /** Immutable cwd for the task's whole life — the Claude-session anchor. */
+  worktreePath: string;
+  mode: "plan" | "execute";
+  /** Whether to attempt `--resume` (false on the first plan run). */
+  resume: boolean;
+  prompt: string;
+  /** Fallback prompt (approved plan + branch state) used when `--resume` fails (cold-start, P0-2). */
+  coldStartPrompt?: string;
+}
+
+export interface AgentRunner {
+  run(args: AgentRunArgs): Promise<AgentRunResult>;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string;
+}
+
+export interface CommitResult {
+  sha: string | null;
+  pushed: boolean;
+  filesChanged: number;
+}
+
+/** Per-task git worktree lifecycle (one mirror clone + a worktree per task branch). */
+export interface Workspace {
+  /** Create (or reuse) the task's branch + worktree. Idempotent. */
+  ensure(task: EngTask): Promise<WorktreeInfo>;
+  /** Commit any changes and push the branch. Idempotent (push -u is safe to repeat). */
+  commitAndPush(task: EngTask, message: string): Promise<CommitResult>;
+  /** Short summary of commits on the branch (for cold-start prompts). */
+  branchLog(task: EngTask): Promise<string>;
+  remove(task: EngTask): Promise<void>;
+}
+
+export interface TestOutcome {
+  passed: boolean;
+  total: number | null;
+  failed: number | null;
+  /** Redacted tail of the test output. */
+  summary: string;
+}
+
+/** Runs the repo's unit tests deterministically (by exit code), not via the agent. */
+export interface Tester {
+  run(worktreePath: string): Promise<TestOutcome>;
+}
+
+export interface PullRequest {
+  number: number;
+  url: string;
+}
+
+export interface PrState {
+  number: number;
+  url: string;
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  merged: boolean;
+  comments: ReviewComment[];
+}
+
+/** GitHub REST operations (backend-initiated: create / poll / merge). Reconcile-before-act. */
+export interface GithubPort {
+  findOpenPr(repo: string, head: string): Promise<PullRequest | null>;
+  createPr(args: { repo: string; head: string; base: string; title: string; body: string }): Promise<PullRequest>;
+  getPr(repo: string, num: number): Promise<PrState>;
+  merge(repo: string, num: number, method: "merge" | "squash" | "rebase"): Promise<{ sha: string; merged: boolean }>;
+}
+
+export interface DeployOutcome {
+  ok: boolean;
+  sha: string | null;
+  /** Redacted redeploy log tail. */
+  logTail: string | null;
+}
+
+/** Triggers the SSH redeploy on the prod host (worker-owned). */
+export interface DeployerPort {
+  redeploy(): Promise<DeployOutcome>;
+}

@@ -1,0 +1,56 @@
+# Loopkeeper on a single VM (AWS Lightsail / EC2 / any Docker host).
+#   cp .env.example .env                 # set LK_HOST
+#   cp loopkeeper.env.example loopkeeper.env && chmod 600 loopkeeper.env   # set secrets
+#   docker compose up -d --build
+services:
+  loopkeeper:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: loopkeeper:latest
+    restart: always
+    env_file: ./loopkeeper.env
+    volumes:
+      - lk_data:/data          # persistent SQLite + encrypted tokens + master key
+    expose:
+      - "8080"                 # internal only; Caddy reaches it over the compose network
+
+  # Engineering worker (Phase 2): runs Claude Code + git/gh + the SSH redeploy. No inbound ports.
+  # Shares eng.db on lk_data with the api. Needs a bigger box than the api alone (≥4 GB).
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    image: loopkeeper-worker:latest
+    restart: always
+    depends_on:
+      - loopkeeper
+    env_file: ./loopkeeper.env
+    volumes:
+      - lk_data:/data            # SHARED SQLite (eng.db) + vault + master key
+      - lk_workspace:/workspace  # mirror clone + per-task git worktrees
+      - lk_claude:/root/.claude  # persists Claude Code session state across restarts (FR-14)
+      # Deploy key for ops/redeploy.sh — uncomment + `chmod 600 deploy/deploy-key` once deploy is enabled:
+      # - ./deploy-key:/root/.ssh/id_ed25519:ro
+
+  caddy:
+    image: caddy:2
+    restart: always
+    depends_on:
+      - loopkeeper
+    ports:
+      - "80:80"                # Let's Encrypt HTTP-01 challenge
+      - "443:443"              # public HTTPS
+    environment:
+      - LK_HOST=${LK_HOST:?set LK_HOST in deploy/.env (e.g. 13-49-22-7.sslip.io)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # persists the issued TLS cert
+      - caddy_config:/config
+
+volumes:
+  lk_data:
+  lk_workspace:
+  lk_claude:
+  caddy_data:
+  caddy_config:

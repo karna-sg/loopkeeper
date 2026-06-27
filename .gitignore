@@ -1,0 +1,35 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Secrets — never commit
+.env
+.env.*
+deploy/.env
+deploy/loopkeeper.env
+*.pem
+*.p8
+AuthKey_*.p8
+
+# Local run artifacts
+*.local.json
+coverage/
+
+# Phase 2 engineering worker — never commit
+deploy/deploy-key
+deploy/deploy-key.pub
+deploy/gh-app.pem
+agent-logs/
+worktrees/
+**/.claude/
+
+# Real-inbox scratch fixtures (personal data — never commit)
+.scratch/
+
+# iOS — XcodeGen regenerates the project from project.yml; Xcode user state is per-machine
+ios/Loopkeeper.xcodeproj/
+ios/DerivedData/
+**/xcuserdata/
+*.xcuserstate
+*.ipa
