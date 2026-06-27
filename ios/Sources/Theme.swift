@@ -22,6 +22,31 @@ enum Theme {
             : UIColor(red: 0.10, green: 0.51, blue: 0.49, alpha: 1.0)
     })
 
+    // MARK: terminal syntax palette
+    // A restrained, terminal-like set so different kinds of information read distinctly: headings
+    // pop, inline code is warm, bold emphasis is calm-green. Tuned for legibility in light + dark.
+
+    /// Markdown / section headings — a lavender-blue that stands above body text.
+    static let mdHeading = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark
+            ? UIColor(red: 0.62, green: 0.70, blue: 1.00, alpha: 1.0)
+            : UIColor(red: 0.28, green: 0.33, blue: 0.78, alpha: 1.0)
+    })
+
+    /// Inline / fenced code — a warm amber, the classic terminal string/identifier color.
+    static let mdCode = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark
+            ? UIColor(red: 0.92, green: 0.74, blue: 0.42, alpha: 1.0)
+            : UIColor(red: 0.62, green: 0.42, blue: 0.10, alpha: 1.0)
+    })
+
+    /// Bold emphasis in body text — a calm green, brighter than primary but not loud.
+    static let mdStrong = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark
+            ? UIColor(red: 0.62, green: 0.86, blue: 0.66, alpha: 1.0)
+            : UIColor(red: 0.10, green: 0.42, blue: 0.22, alpha: 1.0)
+    })
+
     enum Bucket: String, CaseIterable {
         case overdue, today, upcoming, noDate, awaiting
 

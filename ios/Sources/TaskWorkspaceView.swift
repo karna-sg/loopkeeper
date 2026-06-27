@@ -128,16 +128,24 @@ struct TaskWorkspaceView: View {
 
     @ViewBuilder private func pipeline(_ task: EngTask) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionLabel("# pipeline")
-                .padding(.bottom, 8)
+            HStack {
+                sectionLabel("# pipeline")
+                Spacer()
+                Text("tap a stage to expand").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+            }
+            .padding(.bottom, 8)
             ForEach(engStages, id: \.self) { stage in
                 StageBlock(
                     stage: stage,
                     status: statusFor(stage, task),
                     task: task,
+                    isCurrent: stage == task.stage,
                     mono: mono,
                     monoSmall: monoSmall
                 )
+                if stage != engStages.last {
+                    Rectangle().fill(Color.secondary.opacity(0.12)).frame(height: 1)
+                }
             }
         }
     }
@@ -229,7 +237,7 @@ struct TaskWorkspaceView: View {
 
     // MARK: small terminal UI helpers
 
-    @ViewBuilder private func sectionLabel(_ text: String, tint: Color = .secondary) -> some View {
+    @ViewBuilder private func sectionLabel(_ text: String, tint: Color = Theme.headerAccent) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(tint)
@@ -312,40 +320,98 @@ struct TaskWorkspaceView: View {
     }
 }
 
-/// One stage in the pipeline tree:
+/// One COLLAPSIBLE stage in the pipeline:
 ///
-///     plan   ✓ approved
-///       <artifact text, fully shown>
+///     ▸ plan   approved          (collapsed — tap to open)
+///     ▾ plan   approved
+///        <artifact: plan text / dev summary / test output / PR link / sha / log>
 ///
-/// The glyph + key + status form the line; the artifact (plan text, dev summary, test output, PR
-/// link, merge sha, deploy log) is rendered inline beneath it in monospace, indented, never hidden.
+/// The glyph + key + status form the tappable header; the artifact expands beneath it. Stages with
+/// no content show no chevron and don't toggle. Default expansion: the current stage and any
+/// failed/needs-action stage open automatically; everything else starts collapsed so the screen
+/// reads as a scannable list, not a wall of text.
 private struct StageBlock: View {
     let stage: String
     let status: String
     let task: EngTask
+    let isCurrent: Bool
     let mono: Font
     let monoSmall: Font
     @Environment(\.openURL) private var openURL
+    @State private var expanded: Bool?
+
+    /// Computed default: current / failed / needs-attention stages start open.
+    private var defaultExpanded: Bool {
+        if isCurrent { return true }
+        switch status {
+        case "failed", "blocked", "completed_unapproved", "proposed", "ready", "comments_received":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var isOpen: Bool { expanded ?? defaultExpanded }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(Theme.stageGlyph(status))
-                    .font(mono)
-                    .foregroundStyle(Theme.statusTint(status))
-                    .frame(width: 10, alignment: .center)
-                Text(Theme.stageKey(stage))
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(status == "not_started" ? Color.secondary : .primary)
-                Text(Theme.statusToken(stage, status))
-                    .font(mono)
-                    .foregroundStyle(Theme.statusTint(status))
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                guard hasContent else { return }
+                withAnimation(.easeInOut(duration: 0.15)) { expanded = !isOpen }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: hasContent ? (isOpen ? "chevron.down" : "chevron.right") : "minus")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 10)
+                    Text(Theme.stageGlyph(status))
+                        .font(mono)
+                        .foregroundStyle(Theme.statusTint(status))
+                        .frame(width: 10, alignment: .center)
+                    Text(Theme.stageKey(stage))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(stageNameColor)
+                    Text(Theme.statusToken(stage, status))
+                        .font(mono)
+                        .foregroundStyle(Theme.statusTint(status))
+                    Spacer(minLength: 0)
+                    if !hasContent {
+                        Text("—").font(monoSmall).foregroundStyle(.tertiary)
+                    }
+                }
+                .contentShape(Rectangle())
             }
-            artifact
-                .padding(.leading, 18)
+            .buttonStyle(.plain)
+            .disabled(!hasContent)
+
+            if isOpen && hasContent {
+                artifact
+                    .padding(.leading, 28)
+            }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
+    }
+
+    /// Stage name color: dim for not-yet-reached, accent for the active stage, primary otherwise.
+    private var stageNameColor: Color {
+        if status == "not_started" { return .secondary }
+        if isCurrent { return Theme.headerAccent }
+        return .primary
+    }
+
+    /// Whether this stage has any artifact worth expanding (drives the chevron + tap).
+    private var hasContent: Bool {
+        let a = task.artifacts
+        switch stage {
+        case "plan":   return !((a?.plan?.text ?? "").isEmpty) || (status != "not_started")
+        case "dev":    return !((a?.dev?.summary ?? "").isEmpty) || a?.dev?.branchURL != nil || (a?.dev?.filesChanged ?? 0) > 0
+        case "test":   return a?.test?.runs?.last != nil
+        case "pr":     return a?.pr != nil && (status != "not_started")
+        case "review": return !((a?.review?.comments ?? []).isEmpty)
+        case "merge":  return !((a?.merge?.commitSha ?? "").isEmpty)
+        case "deploy": return a?.deploy != nil
+        default:       return false
+        }
     }
 
     /// Per-stage artifact, all content shown in full (long text scrolls with the page).
@@ -385,23 +451,26 @@ private struct StageBlock: View {
             if let r = task.artifacts?.review, let comments = r.comments, !comments.isEmpty {
                 ForEach(comments) { c in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(c.author ?? "reviewer"): \(c.body ?? "")")
-                            .font(mono).foregroundStyle(.primary).textSelection(.enabled)
+                        (Text(c.author ?? "reviewer").foregroundColor(Theme.headerAccent)
+                            + Text(": \(c.body ?? "")").foregroundColor(.primary))
+                            .font(mono).textSelection(.enabled)
                         if let res = c.resolution, !res.isEmpty {
-                            Text("  ✓ \(res)").font(monoSmall).foregroundStyle(.secondary)
+                            Text("  ✓ \(res)").font(monoSmall).foregroundStyle(Theme.mdStrong)
                         }
                     }
                 }
             }
         case "merge":
             if let m = task.artifacts?.merge, let sha = m.commitSha, !sha.isEmpty {
-                Text("merged \(sha)").font(mono).foregroundStyle(.secondary).textSelection(.enabled)
+                (Text("merged ").foregroundColor(.secondary) + Text(sha).foregroundColor(Theme.mdCode))
+                    .font(mono).textSelection(.enabled)
             }
         case "deploy":
             if let dep = task.artifacts?.deploy {
-                Text("\(dep.env ?? "prod"): \(dep.status ?? "—")")
-                    .font(mono).foregroundStyle(.secondary).textSelection(.enabled)
-                if let log = dep.logTail, !log.isEmpty { bodyText(log) }
+                (Text("\(dep.env ?? "prod"): ").foregroundColor(.secondary)
+                    + Text(dep.status ?? "—").foregroundColor(Theme.statusTint(dep.status ?? "")))
+                    .font(mono).textSelection(.enabled)
+                if let log = dep.logTail, !log.isEmpty { bodyText(log, color: .secondary) }
             }
         default:
             EmptyView()
