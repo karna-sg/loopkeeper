@@ -2,6 +2,9 @@ import SwiftUI
 
 /// Stage theming for the engineering pipeline (Phase 2). String-keyed so an unknown backend value
 /// degrades gracefully instead of failing to render.
+///
+/// Terminal-clean variant: status reads as terse monospaced TEXT tokens, not colored capsule pills.
+/// Color is restrained — a single dim accent (and only red/orange when a human is actually needed).
 extension Theme {
     static func stageTitle(_ stage: String) -> String {
         switch stage {
@@ -14,6 +17,13 @@ extension Theme {
         case "deploy": "Deploy"
         default: stage.capitalized
         }
+    }
+
+    /// Lowercase, fixed-width stage key for monospaced lists/trees: `plan  `, `deploy`.
+    /// Pad to the width of the widest key ("deploy"/"review" = 6) so columns line up.
+    static func stageKey(_ stage: String) -> String {
+        let key = (stage == "pr") ? "pr" : stage.lowercased()
+        return key.padding(toLength: 6, withPad: " ", startingAt: 0)
     }
 
     static func stageIcon(_ stage: String) -> String {
@@ -56,6 +66,33 @@ extension Theme {
         }
     }
 
+    /// Terse lowercase token for a dense list line, e.g. `awaiting`, `running`, `failed`, `merged`.
+    static func statusToken(_ stage: String, _ status: String) -> String {
+        switch status {
+        case "not_started": return "queued"
+        case "in_progress": return "running"
+        case "completed_unapproved": return "awaiting"
+        case "approved": return "approved"
+        case "done": return "done"
+        case "passed": return "passed"
+        case "failed": return stage == "deploy" ? "deploy fail" : "failed"
+        case "proposed": return "awaiting"
+        case "creating": return "opening"
+        case "created": return "created"
+        case "awaiting_review": return "in review"
+        case "comments_received": return "comments"
+        case "comments_addressed": return "addressed"
+        case "ready": return "awaiting"
+        case "merging": return "merging"
+        case "merged": return "merged"
+        case "deploying": return "deploying"
+        case "deployed": return "deployed"
+        case "blocked": return "blocked"
+        case "cancelled": return "cancelled"
+        default: return status.lowercased()
+        }
+    }
+
     /// Accent by status: red for failures, orange for "needs a human", blue while running, green for good.
     static func stageAccent(_ status: String) -> Color {
         switch status {
@@ -64,6 +101,31 @@ extension Theme {
         case "in_progress", "creating", "merging", "deploying", "comments_addressed": return .blue
         case "approved", "done", "passed", "merged", "deployed", "created", "awaiting_review": return .green
         default: return .clear
+        }
+    }
+
+    /// Restrained text color for a status token. Neutral by default; color is earned only by a
+    /// failure (red), a pending human gate (orange), or live activity (dim blue). Completed work is
+    /// intentionally NOT green text — it stays neutral so the eye lands on what needs attention.
+    static func statusTint(_ status: String) -> Color {
+        switch status {
+        case "failed", "blocked": return .red
+        case "completed_unapproved", "proposed", "ready", "comments_received": return .orange
+        case "in_progress", "creating", "merging", "deploying", "comments_addressed": return .blue
+        default: return secondary
+        }
+    }
+
+    /// A one-glyph terminal marker for a stage's state: `✓` done, `…` running, `✗` failed,
+    /// `●` needs you, `·` not started. Pure text, monospaced-friendly.
+    static func stageGlyph(_ status: String) -> String {
+        switch status {
+        case "not_started", "queued": return "·"
+        case "in_progress", "creating", "merging", "deploying", "comments_addressed": return "…"
+        case "failed", "blocked": return "✗"
+        case "completed_unapproved", "proposed", "ready", "comments_received": return "●"
+        case "cancelled": return "–"
+        default: return "✓"
         }
     }
 

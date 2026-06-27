@@ -1,48 +1,52 @@
 import SwiftUI
 
-/// A "My Jira Tasks" row — mirrors LoopRow (leading accent bar, glyph, two-line text, trailing badge).
+/// A "My Jira Tasks" row, terminal-clean: one dense monospaced line —
+///
+///     ● LK-4   plan      awaiting
+///       Wire up the retry queue for failed deploys
+///
+/// The leading glyph is the only color (dim dot = needs you, neutral otherwise). No capsule
+/// badge, no card. Hierarchy comes from weight + indent, not size or chrome.
 struct JiraTaskRow: View {
     let task: EngTask
 
     var body: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(Theme.stageAccent(task.status))
-                .frame(width: 3)
-                .frame(maxHeight: .infinity)
-            Image(systemName: Theme.stageIcon(task.stage))
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(task.title).lineLimit(2)
-                HStack(spacing: 5) {
-                    Text(task.jiraKey).monospaced().foregroundStyle(.secondary)
-                    Text("·").foregroundStyle(.tertiary)
-                    Text("\(Theme.stageTitle(task.stage)) — \(Theme.statusLabel(task.stage, task.status))")
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(glyph)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(glyphTint)
+                    .frame(width: 9, alignment: .center)
+                Text(task.jiraKey)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                Text(Theme.stageKey(task.stage))
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(Theme.statusToken(task.stage, task.status))
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(Theme.statusTint(task.status))
+                Spacer(minLength: 6)
+                if task.isRunning {
+                    ProgressView().controlSize(.mini)
                 }
-                .font(.subheadline)
-                .lineLimit(1)
             }
-            Spacer(minLength: 8)
-            badge
+            Text(task.title)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .padding(.leading, 17)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(task.jiraKey), \(task.title), \(Theme.stageTitle(task.stage)) \(Theme.statusLabel(task.stage, task.status))")
     }
 
-    @ViewBuilder private var badge: some View {
-        if task.needsAction {
-            Text("Action")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Color.orange.opacity(0.18), in: Capsule())
-                .foregroundStyle(.orange)
-        } else if task.isRunning {
-            ProgressView().controlSize(.small)
-        } else {
-            Text(Theme.stageTitle(task.stage))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+    /// `●` when waiting on a human, otherwise the stage's terminal glyph.
+    private var glyph: String {
+        task.needsAction ? "●" : Theme.stageGlyph(task.status)
+    }
+
+    private var glyphTint: Color {
+        task.needsAction ? Theme.statusTint(task.status) : .secondary
     }
 }
