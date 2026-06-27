@@ -13,6 +13,9 @@ export interface GitWorkspaceConfig {
   defaultBranch: string;
   /** Repo-scoped token; injected per-command via http.extraheader, never written to .git/config. */
   token: string | null;
+  /** Committer identity, injected per-commit via `-c user.*` (the worker container has none). */
+  authorName: string;
+  authorEmail: string;
 }
 
 /**
@@ -86,7 +89,10 @@ export class GitWorkspace implements Workspace {
     const status = await this.#git(path, ["status", "--porcelain"]);
     const filesChanged = status.out ? status.out.split("\n").filter(Boolean).length : 0;
     if (filesChanged > 0) {
-      await this.#git(path, ["commit", "-m", message]);
+      // Inject identity per-commit (the container has no global git identity); never persisted to config.
+      const ident = ["-c", `user.name=${this.#cfg.authorName}`, "-c", `user.email=${this.#cfg.authorEmail}`];
+      const commit = await this.#git(path, [...ident, "commit", "-m", message]);
+      if (!commit.ok) throw new Error(`git commit failed: ${commit.out.slice(-300)}`);
     }
     const push = await this.#git(path, ["push", "-u", "origin", branch], true);
     if (!push.ok) throw new Error(`git push failed: ${push.out.slice(-300)}`);

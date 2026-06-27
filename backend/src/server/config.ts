@@ -61,6 +61,9 @@ export interface EngConfig {
   maxConcurrent: number;
   /** Where stream-json transcripts are persisted (redacted at capture). */
   agentLogDir: string;
+  /** Committer identity for worker commits (the container has no global git identity). */
+  gitAuthorName: string;
+  gitAuthorEmail: string;
 }
 
 export interface ServerConfig {
@@ -179,6 +182,8 @@ function envEng(env: NodeJS.ProcessEnv, dataDir: string): EngConfig {
     runTimeoutMs: numeric(env.ENG_RUN_TIMEOUT_MS, 1_200_000),
     maxConcurrent: numeric(env.ENG_MAX_CONCURRENT, 1),
     agentLogDir: env.ENG_AGENT_LOG_DIR ?? join(dataDir, "eng", "agent-logs"),
+    gitAuthorName: env.ENG_GIT_AUTHOR_NAME ?? "LoopKeeper Bot",
+    gitAuthorEmail: env.ENG_GIT_AUTHOR_EMAIL ?? "bot@loopkeeper.local",
   };
 }
 

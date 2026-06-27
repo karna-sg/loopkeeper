@@ -40,6 +40,8 @@ export function buildOrchestrator(config: ServerConfig, engStore: EngStore): Orc
     worktreeRoot: config.eng.worktreeRoot,
     defaultBranch: config.github?.baseBranch ?? "main",
     token: config.githubToken,
+    authorName: config.eng.gitAuthorName,
+    authorEmail: config.eng.gitAuthorEmail,
   });
   const tester = new VitestTester({ ...DEFAULT_VITEST_CONFIG, timeoutMs: config.eng.runTimeoutMs });
   const deployer = config.deploy
