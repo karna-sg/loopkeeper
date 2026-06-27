@@ -40,7 +40,7 @@ class FakeWorkspace {
     return { path: `/wt/${task.jiraKey}`, branch: task.branch ?? branchNameFor(task.jiraKey, task.title) };
   }
   async commitAndPush(): Promise<CommitResult> {
-    return { sha: "commitsha", pushed: true, filesChanged: 3 };
+    return { sha: "commitsha", pushed: true, filesChanged: 3, files: ["backend/src/server/routes/version.ts", "backend/src/server/app.ts", "backend/test/server/app.test.ts"] };
   }
   async branchLog(): Promise<string> {
     return "";
@@ -123,6 +123,13 @@ describe("orchestrator: full happy-path lifecycle through the worker", () => {
     expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
     expect(engStore.get(id)!.artifacts.test?.lastPassed).toBe(true);
     expect(engStore.get(id)!.artifacts.pr?.url).toBeNull(); // proposed, not opened
+    // PR body is clean + structured: summary line, file list, test verdict, collapsible plan — not raw agent text.
+    const prBody = engStore.get(id)!.artifacts.pr?.body ?? "";
+    expect(prBody).toContain("## Changes");
+    expect(prBody).toContain("backend/src/server/routes/version.ts");
+    expect(prBody).toContain("## Tests");
+    expect(prBody).toContain("<details>");
+    expect(prBody).not.toContain("did dev"); // the raw agent finalText must NOT leak into the PR body
 
     // Gate 2: approve PR creation → PR opened → awaiting review.
     applyTransition(engStore, { taskId: id, to: { stage: "pr", status: "creating" }, actor: "user", gateApproved: true, ts: NOW }, NOW);

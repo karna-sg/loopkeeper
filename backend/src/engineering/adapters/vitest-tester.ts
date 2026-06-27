@@ -29,6 +29,15 @@ export function parseVitestSummary(output: string): { total: number | null; fail
   };
 }
 
+const ESC = String.fromCharCode(27);
+const ANSI_CSI = new RegExp(`${ESC}\\[[0-9;]*[A-Za-z]`, "g"); // colors, cursor moves
+const ANSI_OTHER = new RegExp(`${ESC}[@-Z\\\\-_]`, "g"); // other single-char escapes
+
+/** Strip ANSI / terminal control sequences (vitest colorizes output) so stored summaries are clean. */
+export function stripAnsi(s: string): string {
+  return s.replace(ANSI_CSI, "").replace(ANSI_OTHER, "");
+}
+
 /** Runs the repo's unit tests by exit code (deterministic) — never via the agent. */
 export class VitestTester implements Tester {
   readonly #cfg: VitestTesterConfig;
@@ -39,7 +48,7 @@ export class VitestTester implements Tester {
   async run(worktreePath: string): Promise<TestOutcome> {
     await runProcess(this.#cfg.installCmd, this.#cfg.installArgs, { cwd: worktreePath, timeoutMs: this.#cfg.timeoutMs });
     const res = await runProcess(this.#cfg.testCmd, this.#cfg.testArgs, { cwd: worktreePath, timeoutMs: this.#cfg.timeoutMs });
-    const combined = `${res.stdout}\n${res.stderr}`;
+    const combined = stripAnsi(`${res.stdout}\n${res.stderr}`);
     const { total, failed } = parseVitestSummary(combined);
     return {
       passed: res.code === 0 && !res.timedOut,

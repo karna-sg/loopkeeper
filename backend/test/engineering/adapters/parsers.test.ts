@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseRedeployOutput } from "../../../src/engineering/adapters/ssh-deployer.ts";
-import { parseVitestSummary } from "../../../src/engineering/adapters/vitest-tester.ts";
+import { parseVitestSummary, stripAnsi } from "../../../src/engineering/adapters/vitest-tester.ts";
 
 describe("parseRedeployOutput", () => {
   it("parses the OK line with the deployed sha", () => {
@@ -23,5 +23,20 @@ describe("parseVitestSummary", () => {
   });
   it("tolerates no summary line", () => {
     expect(parseVitestSummary("compile error")).toEqual({ total: null, failed: null });
+  });
+  it("parses a summary even when vitest colorizes it", () => {
+    const esc = String.fromCharCode(27);
+    const colored = `${esc}[32mTests  ${esc}[1m12 passed${esc}[22m (12)${esc}[0m`;
+    expect(parseVitestSummary(stripAnsi(colored))).toEqual({ total: 12, failed: null });
+  });
+});
+
+describe("stripAnsi", () => {
+  const esc = String.fromCharCode(27);
+  it("removes color + style CSI sequences", () => {
+    expect(stripAnsi(`${esc}[31mred${esc}[0m`)).toBe("red");
+  });
+  it("leaves plain text untouched", () => {
+    expect(stripAnsi("no escapes here")).toBe("no escapes here");
   });
 });

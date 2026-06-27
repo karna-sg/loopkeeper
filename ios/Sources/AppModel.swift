@@ -289,6 +289,7 @@ final class AppModel {
     func revisePlan(_ t: EngTask, note: String) async { Haptics.warning(); if await mutateTasks({ try await api.revisePlan(t.id, note: note) }) { lastActionLabel = "Sent back for revision" } }
     func approvePR(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approvePR(t.id) }) { lastActionLabel = "Opening PR" } }
     func addressComments(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.addressComments(t.id) }) { lastActionLabel = "Addressing comments" } }
+    func approveReview(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approveReview(t.id) }) { lastActionLabel = "Review approved — ready to merge" } }
     func approveMerge(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approveMerge(t.id) }) { lastActionLabel = "Merging" } }
     func retryTask(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.retryTask(t.id) }) { lastActionLabel = "Retrying" } }
 

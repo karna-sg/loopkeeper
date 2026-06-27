@@ -468,6 +468,10 @@ export class EngStore {
           transitionNeedsGate(cur, args.to) ? 1 : 0,
           args.ts,
         );
+      // Clear a stale error once the task moves forward successfully (not when escalating).
+      if (args.to.status !== "blocked" && args.to.status !== "failed" && args.to.status !== "cancelled") {
+        this.#db.prepare("UPDATE eng_tasks SET last_error = NULL WHERE id = ?").run(args.taskId);
+      }
       return true;
     });
     return apply() ? { ok: true, changed: true } : { ok: false, changed: false, reason: "concurrent update lost the race" };

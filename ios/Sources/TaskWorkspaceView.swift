@@ -162,6 +162,8 @@ struct TaskWorkspaceView: View {
                 prGate(task)
             case "review:comments_received":
                 actionButton("address review comments", .blue) { await model.addressComments(task); await reload() }
+            case "review:awaiting_review", "review:comments_addressed":
+                reviewGate(task)
             case "merge:ready":
                 mergeGate(task)
             default:
@@ -216,6 +218,15 @@ struct TaskWorkspaceView: View {
         }
         actionButton("approve & open PR", .green) { await model.approvePR(task); await reload() }
         Text("This opens a public PR on GitHub.").font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func reviewGate(_ task: EngTask) -> some View {
+        if let pr = task.artifacts?.pr, let url = pr.url, let u = URL(string: url) {
+            linkButton("review PR #\(pr.number ?? 0)") { openURL(u) }
+        }
+        actionButton("approve review — ready to merge", .green) { await model.approveReview(task); await reload() }
+        Text("Review the PR on GitHub, then approve here to advance to the merge gate.")
+            .font(monoSmall).foregroundStyle(.secondary)
     }
 
     @ViewBuilder private func mergeGate(_ task: EngTask) -> some View {

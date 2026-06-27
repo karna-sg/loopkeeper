@@ -87,7 +87,8 @@ export class GitWorkspace implements Workspace {
     const path = task.worktreePath ?? join(this.#cfg.worktreeRoot, branch);
     await this.#git(path, ["add", "-A"]);
     const status = await this.#git(path, ["status", "--porcelain"]);
-    const filesChanged = status.out ? status.out.split("\n").filter(Boolean).length : 0;
+    const files = status.out ? status.out.split("\n").filter(Boolean).map((l) => l.slice(3).trim()) : [];
+    const filesChanged = files.length;
     if (filesChanged > 0) {
       // Inject identity per-commit (the container has no global git identity); never persisted to config.
       const ident = ["-c", `user.name=${this.#cfg.authorName}`, "-c", `user.email=${this.#cfg.authorEmail}`];
@@ -97,7 +98,7 @@ export class GitWorkspace implements Workspace {
     const push = await this.#git(path, ["push", "-u", "origin", branch], true);
     if (!push.ok) throw new Error(`git push failed: ${push.out.slice(-300)}`);
     const sha = (await this.#git(path, ["rev-parse", "HEAD"])).out.trim() || null;
-    return { sha, pushed: true, filesChanged };
+    return { sha, pushed: true, filesChanged, files };
   }
 
   async branchLog(task: EngTask): Promise<string> {

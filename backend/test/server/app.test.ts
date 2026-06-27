@@ -382,6 +382,34 @@ describe("engineering routes", () => {
     expect(engStore.events(id).find((e) => e.toStatus === "approved")).toMatchObject({ gateApproved: true, actor: "user" });
   });
 
+  it("review/approve lets the solo operator approve the PR and advances to merge:ready", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    // Wrong stage → 409.
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/review/approve` })).statusCode).toBe(409);
+    const path: Array<[string, string, "user" | "agent" | "system", boolean]> = [
+      ["plan", "in_progress", "user", false],
+      ["plan", "completed_unapproved", "agent", false],
+      ["plan", "approved", "user", true],
+      ["dev", "in_progress", "system", false],
+      ["dev", "done", "agent", false],
+      ["test", "in_progress", "system", false],
+      ["test", "passed", "system", false],
+      ["pr", "proposed", "system", false],
+      ["pr", "creating", "user", true],
+      ["pr", "created", "system", false],
+      ["review", "awaiting_review", "system", false],
+    ];
+    for (const [stage, status, actor, gate] of path) {
+      engStore.transition({ taskId: id, to: { stage: stage as never, status: status as never }, actor, gateApproved: gate, ts: NOW });
+    }
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/review/approve` })).json()).toEqual({ ok: true });
+    expect(engStore.get(id)).toMatchObject({ stage: "merge", status: "ready" });
+    // The review approval is recorded as a user action in the audit log.
+    expect(engStore.events(id).find((e) => e.toStage === "review" && e.toStatus === "approved")).toMatchObject({ actor: "user" });
+  });
+
   it("merge/approve crosses Gate 3 and enqueues a merge job with the method", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);

@@ -47,6 +47,8 @@ export interface CommitResult {
   sha: string | null;
   pushed: boolean;
   filesChanged: number;
+  /** Paths of the changed files (for a clean PR body). */
+  files: string[];
 }
 
 /** Per-task git worktree lifecycle (one mirror clone + a worktree per task branch). */

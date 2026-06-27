@@ -176,6 +176,24 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     return { started: true };
   });
 
+  // --- Review: solo self-approve (a single-account operator can't approve their own GitHub PR;
+  //     the human review here IS the user reviewing the PR in the app). Advances to merge:ready. ---
+  app.post("/tasks/:id/review/approve", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    if (!(task.stage === "review" && (task.status === "awaiting_review" || task.status === "comments_addressed"))) {
+      return reply.code(409).send({ error: "task is not awaiting review" });
+    }
+    const now = deps.now();
+    const approved = applyTransition(engStore, { taskId: id, to: { stage: "review", status: "approved" }, actor: "user", ...detail(), ts: now }, now);
+    if (!approved.ok) return reply.code(409).send({ error: approved.reason ?? "cannot approve review" });
+    applyTransition(engStore, { taskId: id, to: { stage: "merge", status: "ready" }, actor: "user", ...detail(), ts: now }, now);
+    return { ok: true };
+  });
+
   // --- Gate 3: merge (FR-23) ---
 
   app.post("/tasks/:id/merge/approve", async (req, reply) => {

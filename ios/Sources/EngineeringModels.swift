@@ -111,7 +111,7 @@ struct EngTask: Codable, Identifiable, Hashable {
     var needsAction: Bool {
         if status == "blocked" { return true }
         switch "\(stage):\(status)" {
-        case "plan:completed_unapproved", "pr:proposed", "review:comments_received", "merge:ready", "deploy:failed":
+        case "plan:completed_unapproved", "pr:proposed", "review:awaiting_review", "review:comments_received", "review:comments_addressed", "merge:ready", "deploy:failed":
             return true
         default:
             return false
