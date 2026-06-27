@@ -187,9 +187,9 @@ function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngSt
     run: async () => {
       const now = new Date().toISOString();
       await buildProdScanService(config, store, vault, http, config.identity).run({
-        sinceIso: daysBefore(now, 1),
+        sinceIso: daysBefore(now, 1), // last 1 day only
         nowIso: now,
-        limitPerSource: 1000,
+        limitPerSource: 250, // lighter per-scan fetch
         includeQuoteExcerpt: config.includeQuoteExcerpt,
       });
     },
@@ -198,6 +198,7 @@ function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngSt
     name: "nudge",
     intervalMs: config.nudgeEveryMin * 60_000,
     run: async () => {
+      if (!config.apns) return; // server push not configured — skip quietly (the app polls instead)
       await buildProdNudgeService(config, store).run({ nowIso: new Date().toISOString(), timezone: config.identity.timezone });
     },
   });
@@ -230,7 +231,7 @@ function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngSt
     name: "eng-notify",
     intervalMs: 60_000,
     run: async () => {
-      if (!config.apns) throw new Error("APNs not configured");
+      if (!config.apns) return; // skip quietly when APNs isn't configured (no log flood)
       await new EngNotifier(engStore, new ApnsClient(config.apns), () => store.listDeviceTokens()).run();
     },
   });

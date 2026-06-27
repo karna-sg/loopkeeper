@@ -47,7 +47,7 @@ final class AppModel {
             async let healthTask = api.health()
             async let tasksTask = try? api.tasks() // nil-tolerant: Jira may be unconnected (503)
             brief = try await briefTask
-            health = try await healthTask
+            health = (try? await healthTask) ?? health           // non-fatal: a health hiccup shouldn't error the page
             engineeringTasks = (await tasksTask) ?? engineeringTasks
             errorMessage = nil
             lastUpdated = Date()
@@ -57,8 +57,8 @@ final class AppModel {
         }
     }
 
-    /// Manual scan: a wider backfill window than the 2-hourly auto-scan, run in the background.
-    func scan(days: Int = 7) async {
+    /// Manual scan: re-scan the last day in the background (kept light so it doesn't bog the box).
+    func scan(days: Int = 1) async {
         isScanning = true
         lastActionLabel = nil
         defer { isScanning = false }
