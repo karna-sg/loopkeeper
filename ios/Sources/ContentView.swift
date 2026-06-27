@@ -23,7 +23,7 @@ struct ContentView: View {
                 warningBanner
                 content
                     .refreshable { await model.refresh() }
-                    .task { await model.refresh() }
+                    .task { await model.refresh(); model.autoSyncTasksIfNeeded() }
                     .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search loops")
                     .onChange(of: searchText) { _, q in
                         Task { searchResults = q.trimmingCharacters(in: .whitespaces).isEmpty ? [] : await model.search(q) }
@@ -121,7 +121,7 @@ struct ContentView: View {
     @ViewBuilder private var content: some View {
         if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
             searchList
-        } else if !model.isEmpty || !model.engineeringTasks.isEmpty {
+        } else if !model.isEmpty || !model.engineeringTasks.isEmpty || model.jiraConnected {
             briefList
         } else if model.isLoading {
             ProgressView(model.isScanning ? "Scanning for new commitments…" : "Loading your loops…")
@@ -160,7 +160,7 @@ struct ContentView: View {
                     terminalHeader("# focus")
                 }
             }
-            if !model.engineeringTasks.isEmpty {
+            if !model.engineeringTasks.isEmpty || model.jiraConnected {
                 Section {
                     ForEach(model.sortedTasks) { task in
                         JiraTaskRow(task: task)
@@ -169,9 +169,14 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { Haptics.tap(); selectedTask = task }
                     }
+                    if model.engineeringTasks.isEmpty {
+                        Text(model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    }
                 } header: {
-                    terminalHeader("# tasks", trailing: model.tasksNeedingAction > 0
-                        ? "\(model.tasksNeedingAction) need you" : nil, trailingTint: .orange)
+                    tasksHeader
                 }
             }
             if let brief = model.brief {
@@ -272,6 +277,38 @@ struct ContentView: View {
             if let trailing {
                 Text(trailing).font(.system(size: 11, design: .monospaced)).foregroundStyle(trailingTint)
             }
+        }
+        .textCase(nil)
+    }
+
+    /// `# tasks` header with a dedicated Jira-sync action. Pull-to-refresh stays cheap (re-read only);
+    /// this `[ sync ]` button is the one control that pulls newly-assigned tickets from Jira.
+    @ViewBuilder
+    private var tasksHeader: some View {
+        HStack(spacing: 8) {
+            Text("# tasks")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.headerAccent)
+            if model.tasksNeedingAction > 0 {
+                Text("\(model.tasksNeedingAction) need you")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.orange)
+            }
+            Spacer()
+            Button { Task { await model.syncTasks() } } label: {
+                HStack(spacing: 5) {
+                    if model.isSyncingTasks {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 10))
+                    }
+                    Text(model.isSyncingTasks ? "syncing" : "sync")
+                        .font(.system(size: 11, design: .monospaced))
+                }
+                .foregroundStyle(model.isSyncingTasks ? Color.secondary : Theme.headerAccent)
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isSyncingTasks)
         }
         .textCase(nil)
     }

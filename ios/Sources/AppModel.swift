@@ -19,6 +19,10 @@ final class AppModel {
 
     /// Phase 2: the user's Jira engineering tasks (My Jira Tasks section). Empty/absent until Jira is connected.
     var engineeringTasks: [EngTask] = []
+    /// True while a manual Jira sync (`# tasks` → sync) is pulling newly-assigned tickets. Drives the spinner.
+    var isSyncingTasks = false
+    /// Guards the one-shot auto-sync on first load so re-renders don't re-trigger it.
+    private var didAutoSyncTasks = false
 
     private var api: APIClient
 
@@ -31,6 +35,9 @@ final class AppModel {
     }
 
     var hasConnections: Bool { !(health?.connected.isEmpty ?? true) }
+
+    /// Whether Jira is connected (drives showing the `# tasks` section + sync button even with no tasks yet).
+    var jiraConnected: Bool { health?.connected.contains { $0.provider.lowercased() == "jira" } ?? false }
     var extractionConfigured: Bool { health?.extractionConfigured ?? false }
 
     var isEmpty: Bool {
@@ -248,7 +255,35 @@ final class AppModel {
         }
     }
 
-    func syncTasks() async { Haptics.tap(); _ = await mutateTasks { try await api.syncTasks() } }
+    /// Pull newly-assigned Jira tickets into the store (`POST /tasks/sync`), then re-read the list.
+    /// This is the ONLY path that ingests new Jira tasks — plain refresh just re-reads what's stored.
+    /// Manual trigger from the `# tasks` header. Surfaces real failures, but stays quiet when Jira
+    /// simply isn't connected (503) so it never nags an unconfigured user.
+    func syncTasks() async {
+        Haptics.tap()
+        isSyncingTasks = true
+        defer { isSyncingTasks = false }
+        do {
+            try await api.syncTasks()
+            await refreshTasks()
+        } catch {
+            if let apiError = error as? APIError, apiError.status == 503 { return } // Jira unconnected: no-op
+            errorMessage = friendly(error)
+        }
+    }
+
+    /// Fire-and-forget Jira sync once on first app load, so a freshly-assigned ticket appears without
+    /// a manual tap. Non-blocking and silent: never spins the UI, never alerts (errors are swallowed).
+    func autoSyncTasksIfNeeded() {
+        guard !didAutoSyncTasks else { return }
+        didAutoSyncTasks = true
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.api.syncTasks()
+            await self.refreshTasks()
+        }
+    }
+
     func preparePlan(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.preparePlan(t.id) }) { lastActionLabel = "Planning started" } }
     func approvePlan(_ t: EngTask, editedText: String?) async { Haptics.success(); if await mutateTasks({ try await api.approvePlan(t.id, editedText: editedText) }) { lastActionLabel = "Plan approved — building" } }
     func revisePlan(_ t: EngTask, note: String) async { Haptics.warning(); if await mutateTasks({ try await api.revisePlan(t.id, note: note) }) { lastActionLabel = "Sent back for revision" } }
