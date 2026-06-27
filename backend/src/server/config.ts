@@ -78,6 +78,10 @@ export interface ServerConfig {
   google: OAuthAppConfig | null;
   llmProvider: LlmProvider;
   anthropicApiKey: string | null;
+  /** Claude Code subscription auth (from `claude setup-token`) — preferred over the API key for the
+   *  worker so the agent runs on the subscription, not metered API billing. Null = use `claude login`
+   *  creds in ~/.claude, or fall back to anthropicApiKey. */
+  claudeOauthToken: string | null;
   openaiApiKey: string | null;
   openaiModel: string;
   apns: ApnsConfig | null;
@@ -94,6 +98,10 @@ export interface ServerConfig {
   // --- Phase 2: engineering orchestration (all graceful-disable when unset) ---
   /** Jira OAuth (3LO) app credentials; null until configured (FR-1). */
   jira: OAuthAppConfig | null;
+  /** Jira API-token (Basic auth) path — simplest for a single-user backend. All three required. */
+  jiraBaseUrl: string | null;   // https://<site>.atlassian.net
+  jiraEmail: string | null;
+  jiraApiToken: string | null;  // secret; never echoed. From id.atlassian.com API tokens.
   /** The single user's Jira accountId — assignee-gate identity + GET /tasks filter (assignee-only). */
   selfAccountId: string | null;
   /** GitHub target repo; null until configured. */
@@ -196,6 +204,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     google: envOAuth(env, "GOOGLE"),
     llmProvider: resolveProvider(env),
     anthropicApiKey: env.ANTHROPIC_API_KEY ?? null,
+    claudeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
     openaiApiKey: env.OPENAI_API_KEY ?? null,
     openaiModel: env.OPENAI_MODEL ?? "gpt-4o-mini",
     apns: envApns(env),
@@ -205,6 +214,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ttlDays: Number(env.LOOPKEEPER_TTL_DAYS ?? "30"),
     includeQuoteExcerpt: env.LOOPKEEPER_INCLUDE_QUOTE === "1",
     jira: envOAuth(env, "JIRA"),
+    jiraBaseUrl: env.JIRA_BASE_URL ?? null,
+    jiraEmail: env.JIRA_EMAIL ?? null,
+    jiraApiToken: env.JIRA_API_TOKEN ?? null,
     selfAccountId: env.LOOPKEEPER_JIRA_ACCOUNT_ID ?? null,
     github: envGithub(env),
     githubToken: env.GITHUB_TOKEN ?? null,

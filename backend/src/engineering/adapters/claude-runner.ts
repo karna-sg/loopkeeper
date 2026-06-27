@@ -8,7 +8,10 @@ import { runProcess } from "./spawn.ts";
 export interface ClaudeRunnerConfig {
   claudeBin: string;
   model: string | null;
-  anthropicApiKey: string;
+  /** API-key auth (metered). Prefer subscription auth in dev — leave null and use oauthToken / `claude login`. */
+  anthropicApiKey: string | null;
+  /** Subscription OAuth token (from `claude setup-token`). */
+  oauthToken: string | null;
   timeoutMs: number;
   logDir: string;
   /** Repo-scoped token the agent may use for git operations on its branch (never the deploy key). */
@@ -55,11 +58,14 @@ export class ClaudeAgentRunner implements AgentRunner {
     if (this.#cfg.model) argv.push("--model", this.#cfg.model);
     argv.push(args.prompt);
 
+    // Minimal env (blast-radius control). HOME lets `claude` find ~/.claude subscription creds.
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       HOME: process.env.HOME ?? "",
-      ANTHROPIC_API_KEY: this.#cfg.anthropicApiKey,
     };
+    // Auth precedence: subscription OAuth token → API key → fall back to ~/.claude login (no env needed).
+    if (this.#cfg.oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = this.#cfg.oauthToken;
+    else if (this.#cfg.anthropicApiKey) env.ANTHROPIC_API_KEY = this.#cfg.anthropicApiKey;
     if (this.#cfg.githubToken) {
       env.GH_TOKEN = this.#cfg.githubToken;
       env.GITHUB_TOKEN = this.#cfg.githubToken;

@@ -26,7 +26,7 @@ import type { SlackChannelInfo } from "../sources/slack-source.ts";
 import { GmailSource } from "../sources/gmail-source.ts";
 import { refreshGoogleToken } from "../oauth/google-oauth.ts";
 import { refreshJiraToken } from "../oauth/jira-oauth.ts";
-import { CloudJiraClient } from "../engineering/jira/jira-client.ts";
+import { CloudJiraClient, BasicJiraClient } from "../engineering/jira/jira-client.ts";
 import type { JiraTokenProvider } from "../engineering/jira/jira-client.ts";
 import { JiraSyncService } from "../engineering/jira/jira-sync.ts";
 import { PrMonitor } from "../engineering/pr-monitor.ts";
@@ -108,19 +108,26 @@ function jiraTokenProvider(config: ServerConfig, vault: TokenVault, http: HttpCl
   };
 }
 
-/** Build the Jira import service from the connected account. Throws if Jira isn't connected. */
+/** Build the Jira import service. Prefers the simple API-token (Basic) path, else OAuth. */
 function buildProdJiraSync(config: ServerConfig, engStore: EngStore, vault: TokenVault, http: HttpClient): JiraSyncService {
+  const mapping = { repo: config.github?.repo ?? "", defaultBranch: config.github?.baseBranch ?? "main" };
+
+  // API-token path: no OAuth app / browser connect needed.
+  if (config.jiraApiToken && config.jiraBaseUrl && config.jiraEmail) {
+    const client = new BasicJiraClient(http, config.jiraBaseUrl, config.jiraEmail, config.jiraApiToken);
+    return new JiraSyncService(client, engStore, { siteUrl: config.jiraBaseUrl, ...mapping });
+  }
+
+  // OAuth (3LO) path: requires /auth/jira to have stored a token.
   const entry = vault.list().find((v) => v.provider === "jira");
-  if (!entry) throw new Error("Jira not connected — visit /auth/jira first");
+  if (!entry) {
+    throw new Error("Jira not connected — set JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN, or visit /auth/jira");
+  }
   const token = vault.get("jira", entry.account);
   const cloudId = token?.meta?.cloudId ?? entry.account;
   const siteUrl = token?.meta?.siteUrl ?? "";
   const client = new CloudJiraClient(http, jiraTokenProvider(config, vault, http, entry.account), cloudId);
-  return new JiraSyncService(client, engStore, {
-    siteUrl,
-    repo: config.github?.repo ?? "",
-    defaultBranch: config.github?.baseBranch ?? "main",
-  });
+  return new JiraSyncService(client, engStore, { siteUrl, ...mapping });
 }
 
 /** Construct the production scan service from the configured connectors. */

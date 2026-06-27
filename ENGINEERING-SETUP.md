@@ -29,13 +29,22 @@ status check, **block direct pushes and force-pushes**. This is a hard stop — 
 Create a **fine-grained PAT scoped to only the LoopKeeper repo**, permissions: **Contents: r/w**,
 **Pull requests: r/w**. This goes in `deploy/loopkeeper.env` as `GITHUB_TOKEN` (worker only, never the app).
 
-## 3. Jira OAuth app + your account id
+## 3. Jira auth — API token (recommended) or OAuth
 
-- Atlassian Developer console → create an **OAuth 2.0 (3LO)** app. Scopes (read-only):
-  `read:jira-work`, `read:jira-user`, `offline_access`. Callback URL: `https://<LK_HOST>/auth/jira/callback`.
-- Put `JIRA_CLIENT_ID` / `JIRA_CLIENT_SECRET` in `deploy/loopkeeper.env`.
-- After connecting (step 7), find your Jira `accountId` and set `LOOPKEEPER_JIRA_ACCOUNT_ID`
-  (the assignee gate + `GET /tasks` filter; gates **fail closed** if it's unset).
+**Recommended: API token (Basic auth).** Simplest for a single user — no developer-console app, no
+callback, no browser connect.
+- Create a token at **id.atlassian.com/manage-profile/security/api-tokens** ("Create API token").
+- Set in `deploy/loopkeeper.env`: `JIRA_BASE_URL=https://<site>.atlassian.net`, `JIRA_EMAIL=<you>`,
+  `JIRA_API_TOKEN=<token>`. The token stays server-side (never in the app, never in chat).
+- That's it — `POST /tasks/sync` imports the issues assigned to you. No `/auth/jira` step needed.
+
+**Alternative: OAuth 2.0 (3LO).** Developer console app, scopes `read:jira-work read:jira-user
+offline_access`, callback `https://<LK_HOST>/auth/jira/callback`; set `JIRA_CLIENT_ID`/`JIRA_CLIENT_SECRET`
+and connect via Settings → Connect Jira.
+
+**Your account id** (`LOOPKEEPER_JIRA_ACCOUNT_ID`): only needed for the assignee gate + `GET /tasks`
+filter (gates fail closed without it). Get it after a sync via `GET <base>/rest/api/3/myself`. You can
+skip it for the first read-only test (import already filters to your tickets via `currentUser()`).
 
 ## 4. Jira project + seed tickets  (dogfood)
 

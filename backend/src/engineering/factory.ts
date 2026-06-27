@@ -21,13 +21,15 @@ function repoUrl(config: ServerConfig): string {
   throw new Error("no repo configured (ENG_REPO_URL or GITHUB_REPO)");
 }
 
-/** Build the orchestrator with the real adapters (worker process). Throws if not runnable. */
+/** Build the orchestrator with the real adapters (worker process). */
 export function buildOrchestrator(config: ServerConfig, engStore: EngStore): Orchestrator {
-  if (!config.anthropicApiKey) throw new Error("ANTHROPIC_API_KEY not set — the worker cannot run Claude Code");
+  // Auth is handled by the Claude CLI: subscription OAuth token, API key, or a prior `claude login`
+  // (~/.claude). We don't hard-require an env credential — `claude login` on the VM is valid.
   const agentRunner = new ClaudeAgentRunner({
     claudeBin: config.eng.claudeBin,
     model: config.eng.claudeModel,
     anthropicApiKey: config.anthropicApiKey,
+    oauthToken: config.claudeOauthToken,
     timeoutMs: config.eng.runTimeoutMs,
     logDir: config.eng.agentLogDir,
     githubToken: config.githubToken,
