@@ -103,8 +103,10 @@ export class Orchestrator {
     let task = this.#require(taskId);
     const ws = await workspace.ensure(task);
     engStore.setBranchAndWorktree(taskId, ws.branch, ws.path, now());
-    const sessionId = task.claudeSessionId ?? randomUUID();
-    if (!task.claudeSessionId) engStore.setClaudeSession(taskId, sessionId, now());
+    // A plan (or re-plan via revise) always starts a FRESH Claude session — reusing an existing id
+    // with `--session-id` collides. Dev/review later resume THIS session.
+    const sessionId = randomUUID();
+    engStore.setClaudeSession(taskId, sessionId, now());
     task = this.#require(taskId);
 
     const runId = engStore.startAgentRun({ taskId, stage: "plan", sessionId, iteration: 0, startedTs: now() });

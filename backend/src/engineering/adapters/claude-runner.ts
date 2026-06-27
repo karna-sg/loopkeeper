@@ -21,6 +21,10 @@ export interface ClaudeRunnerConfig {
 interface StreamResult {
   sessionId: string;
   finalText: string;
+  /** Plan text from an ExitPlanMode tool call (plan mode delivers the plan here, not in `result`). */
+  planText: string;
+  /** Last non-empty assistant text (fallback for the change summary when `result` is empty). */
+  lastAssistantText: string;
   isError: boolean;
   sawResult: boolean;
   usdCents: number;
@@ -72,7 +76,7 @@ export class ClaudeAgentRunner implements AgentRunner {
     }
 
     const logPath = this.#openLog(args);
-    const parsed: StreamResult = { sessionId: args.sessionId, finalText: "", isError: false, sawResult: false, usdCents: 0, numTurns: null };
+    const parsed: StreamResult = { sessionId: args.sessionId, finalText: "", planText: "", lastAssistantText: "", isError: false, sawResult: false, usdCents: 0, numTurns: null };
 
     const proc = await runProcess(this.#cfg.claudeBin, argv, {
       cwd: args.worktreePath,
@@ -84,11 +88,13 @@ export class ClaudeAgentRunner implements AgentRunner {
       },
     });
 
+    // Plan mode → ExitPlanMode.plan; execute → result text; fall back to the last assistant message.
+    const finalText = parsed.finalText || parsed.planText || parsed.lastAssistantText;
     const ok = proc.code === 0 && !proc.timedOut && !parsed.isError && parsed.sawResult;
     return {
       ok,
       sessionId: parsed.sessionId,
-      finalText: redactSecrets(parsed.finalText),
+      finalText: redactSecrets(finalText),
       usdCents: parsed.usdCents,
       numTurns: parsed.numTurns,
       exitCode: proc.code,
@@ -107,6 +113,19 @@ export class ClaudeAgentRunner implements AgentRunner {
       return; // ignore non-JSON partials
     }
     if (typeof evt.session_id === "string") out.sessionId = evt.session_id;
+    // Assistant messages: track the last text block + capture the plan from ExitPlanMode (plan mode).
+    if (evt.type === "assistant") {
+      const msg = evt.message as { content?: unknown } | undefined;
+      if (msg && Array.isArray(msg.content)) {
+        for (const c of msg.content as Array<Record<string, unknown>>) {
+          if (c.type === "text" && typeof c.text === "string" && c.text.trim()) out.lastAssistantText = c.text;
+          if (c.type === "tool_use" && c.name === "ExitPlanMode") {
+            const input = c.input as { plan?: unknown } | undefined;
+            if (input && typeof input.plan === "string") out.planText = input.plan;
+          }
+        }
+      }
+    }
     if (evt.type === "result") {
       out.sawResult = true;
       out.isError = evt.is_error === true;
