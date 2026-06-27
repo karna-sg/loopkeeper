@@ -22,8 +22,8 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         PRODUCT_BUNDLE_IDENTIFIER: com.curiescious.loopkeeper
         PRODUCT_NAME: Loopkeeper
-        MARKETING_VERSION: "0.2.4"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "0.2.5"
+        CURRENT_PROJECT_VERSION: "7"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: Loopkeeper
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
