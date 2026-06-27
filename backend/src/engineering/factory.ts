@@ -22,7 +22,7 @@ function repoUrl(config: ServerConfig): string {
 }
 
 /** Build the orchestrator with the real adapters (worker process). */
-export function buildOrchestrator(config: ServerConfig, engStore: EngStore): Orchestrator {
+export function buildOrchestrator(config: ServerConfig, engStore: EngStore, cancelRegistry?: Map<string, () => void>): Orchestrator {
   // Auth is handled by the Claude CLI: subscription OAuth token, API key, or a prior `claude login`
   // (~/.claude). We don't hard-require an env credential — `claude login` on the VM is valid.
   const agentRunner = new ClaudeAgentRunner({
@@ -57,16 +57,19 @@ export function buildOrchestrator(config: ServerConfig, engStore: EngStore): Orc
     deployEnabled: config.deploy?.enabled ?? false,
     deployEnv: "prod",
     now: () => new Date().toISOString(),
+    cancelRegistry,
   });
 }
 
 /** Build the worker runner (worker process entrypoint). */
 export function buildWorker(config: ServerConfig, engStore: EngStore): WorkerRunner {
+  const cancelRegistry = new Map<string, () => void>();
   return new WorkerRunner({
     engStore,
-    orchestrator: buildOrchestrator(config, engStore),
+    orchestrator: buildOrchestrator(config, engStore, cancelRegistry),
     workerId: `worker-${process.pid}`,
     now: () => new Date().toISOString(),
     leaseMs: config.eng.runTimeoutMs * 2,
+    cancelRegistry,
   });
 }

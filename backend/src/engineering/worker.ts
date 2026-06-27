@@ -14,6 +14,11 @@ export interface WorkerDeps {
   now: () => string;
   /** How long a claim lease lasts before the reaper requeues it. */
   leaseMs: number;
+  /**
+   * Shared map populated by the orchestrator when an agent process starts. The cancel-watcher
+   * polls `isTaskCancelPending` and calls the registered kill fn to stop the process group.
+   */
+  cancelRegistry?: Map<string, () => void>;
 }
 
 export class WorkerRunner {
@@ -34,19 +39,37 @@ export class WorkerRunner {
 
   /** Claim and run at most one job. Returns true if a job ran (success or escalation). */
   async tick(): Promise<boolean> {
-    const { engStore, orchestrator, workerId, now, leaseMs } = this.#d;
+    const { engStore, orchestrator, workerId, now, leaseMs, cancelRegistry } = this.#d;
     engStore.reapExpiredLeases(now());
     const leaseUntil = new Date(Date.parse(now()) + leaseMs).toISOString();
     const job = engStore.claimNext(workerId, now(), leaseUntil);
     if (!job) return false;
     engStore.markJobRunning(job.id, now());
+
+    // Poll the cancel_pending flag every 1.5 s while the job runs; kill the process group when set.
+    // Only needed when a cancelRegistry is wired — without one there are no kill callbacks to invoke.
+    let cancelWatcher: ReturnType<typeof setInterval> | null = null;
+    if (cancelRegistry) {
+      cancelWatcher = setInterval(() => {
+        if (engStore.isTaskCancelPending(job.taskId)) {
+          cancelRegistry.get(job.taskId)?.();
+          if (cancelWatcher) { clearInterval(cancelWatcher); cancelWatcher = null; }
+        }
+      }, 1_500);
+    }
+
     try {
       await orchestrator.runJob(job);
       engStore.completeJob(job.id, null, now());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       engStore.failJob(job.id, msg, now());
-      orchestrator.escalate(job.taskId, msg);
+      // Skip escalation if the task was already moved to blocked by the cancel route.
+      if (!engStore.isTaskCancelPending(job.taskId)) {
+        orchestrator.escalate(job.taskId, msg);
+      }
+    } finally {
+      if (cancelWatcher) { clearInterval(cancelWatcher); cancelWatcher = null; }
     }
     return true;
   }

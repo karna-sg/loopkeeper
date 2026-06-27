@@ -439,4 +439,60 @@ describe("engineering routes", () => {
     expect(job?.kind).toBe("merge");
     expect(JSON.parse(job?.payload ?? "{}")).toEqual({ method: "squash" });
   });
+
+  it("POST /tasks/:id/cancel 403s without self identity", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/cancel` })).statusCode).toBe(403);
+  });
+
+  it("POST /tasks/:id/cancel 404s for unknown task", async () => {
+    const { app } = makeApp({ selfAccountId: "acct-1" });
+    expect((await app.inject({ method: "POST", url: "/tasks/nope/cancel" })).statusCode).toBe(404);
+  });
+
+  it("POST /tasks/:id/cancel moves an active task to blocked and cancels jobs", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    // Advance to a running state and enqueue a job.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    engStore.enqueue({ taskId: id, kind: "plan", dedupeKey: `${id}:plan` }, NOW);
+
+    const res = await app.inject({ method: "POST", url: `/tasks/${id}/cancel` });
+    expect(res.json()).toEqual({ ok: true });
+    const task = engStore.get(id)!;
+    expect(task).toMatchObject({ stage: "plan", status: "blocked" });
+    expect(task.lastError).toBe("Cancelled by user.");
+    // Queued jobs are cancelled.
+    expect(engStore.runningJobForTask(id)).toBeNull();
+    // cancel_pending flag is set for the worker-watcher.
+    expect(engStore.isTaskCancelPending(id)).toBe(true);
+  });
+
+  it("POST /tasks/:id/cancel 409s for a terminal task", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    // Drive to cancelled (terminal).
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/cancel` })).statusCode).toBe(409);
+  });
+
+  it("retry after cancel resets cancel_pending and resumes from blocked", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    // Put into blocked via cancel.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    await app.inject({ method: "POST", url: `/tasks/${id}/cancel` });
+    expect(engStore.isTaskCancelPending(id)).toBe(true);
+    // Retry → raises budget, clears cancel_pending, transitions back.
+    const retry = await app.inject({ method: "POST", url: `/tasks/${id}/retry` });
+    expect(retry.json()).toEqual({ started: true });
+    expect(engStore.isTaskCancelPending(id)).toBe(false);
+    expect(engStore.get(id)).toMatchObject({ stage: "plan", status: "in_progress" });
+  });
 });

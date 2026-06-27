@@ -109,6 +109,7 @@ struct APIClient {
     func approveReview(_ id: String) async throws { try await act("/tasks/\(id)/review/approve") }
     func approveMerge(_ id: String, method: String = "squash") async throws { try await act("/tasks/\(id)/merge/approve", body: ["method": method]) }
     func retryTask(_ id: String) async throws { try await act("/tasks/\(id)/retry") }
+    func cancelTask(_ id: String) async throws { try await act("/tasks/\(id)/cancel") }
 
     // MARK: - transport
 

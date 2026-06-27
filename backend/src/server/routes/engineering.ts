@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppDeps } from "../deps.ts";
 import type { EngTask, Status } from "../../domain/eng-task.ts";
 import { applyTransition } from "../../engineering/orchestrator.ts";
+import { isTerminal } from "../../engineering/state-machine.ts";
 
 /** Live = a stage is executing; the status endpoint reports running vs stalled vs idle. */
 const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>(["in_progress", "creating", "merging", "deploying"]);
@@ -250,5 +251,38 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     }
 
     return reply.code(409).send({ error: "task is not in a retryable state" });
+  });
+
+  // --- Cancel: stop a running task, move it to blocked (recoverable via retry) ---
+
+  app.post("/tasks/:id/cancel", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    if (isTerminal({ stage: task.stage, status: task.status })) {
+      return reply.code(409).send({ error: "task is already terminal" });
+    }
+    const now = deps.now();
+    // Signal the worker cancel-watcher to kill the live process group.
+    engStore.setCancelPending(id, now);
+    // Drain the job queue so nothing new starts while the signal propagates.
+    engStore.cancelJobsForTask(id, now);
+    // Move to blocked (same stage) so the retry UI can recover it.
+    // Actor is "system" because the state machine reserves "blocked" for non-user actors.
+    const r = engStore.transition({
+      taskId: id,
+      to: { stage: task.stage, status: "blocked" },
+      actor: "system",
+      note: "user cancel",
+      actorDetail: config.selfAccountId ?? undefined,
+      ts: now,
+    });
+    if (!r.ok && r.reason !== "concurrent update lost the race") {
+      return reply.code(409).send({ error: r.reason ?? "cannot cancel" });
+    }
+    engStore.setProgress(id, { lastError: "Cancelled by user." }, now);
+    return { ok: true };
   });
 }
