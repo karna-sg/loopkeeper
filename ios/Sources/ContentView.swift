@@ -21,7 +21,6 @@ struct ContentView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 warningBanner
-                overcommitBanner
                 content
                     .refreshable { await model.refresh() }
                     .task { await model.refresh() }
@@ -141,10 +140,14 @@ struct ContentView: View {
             if searchResults.isEmpty {
                 ContentUnavailableView.search(text: searchText)
             } else {
-                Section("Results") { ForEach(searchResults) { row($0) } }
+                Section {
+                    ForEach(searchResults) { row($0) }
+                } header: {
+                    terminalHeader("# results", searchResults.count)
+                }
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
     }
 
     private var briefList: some View {
@@ -153,29 +156,21 @@ struct ContentView: View {
                 Section {
                     ForEach(focusNow) { row($0) }
                 } header: {
-                    Label("Focus now", systemImage: "scope").textCase(nil)
+                    terminalHeader("# focus")
                 }
             }
             if !model.engineeringTasks.isEmpty {
                 Section {
                     ForEach(model.sortedTasks) { task in
                         JiraTaskRow(task: task)
+                            .listRowSeparator(.visible)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .contentShape(Rectangle())
                             .onTapGesture { Haptics.tap(); selectedTask = task }
                     }
                 } header: {
-                    HStack(spacing: 6) {
-                        Text("# jira")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .textCase(nil)
-                        Spacer()
-                        if model.tasksNeedingAction > 0 {
-                            Text("\(model.tasksNeedingAction) need you")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.orange)
-                                .textCase(nil)
-                        }
-                    }
+                    terminalHeader("# jira", trailing: model.tasksNeedingAction > 0
+                        ? "\(model.tasksNeedingAction) need you" : nil, trailingTint: .orange)
                 }
             }
             if let brief = model.brief {
@@ -186,7 +181,8 @@ struct ContentView: View {
                 section(.awaiting, sorted(brief.awaiting))
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 0)
         .animation(.default, value: model.brief?.date)
     }
 
@@ -213,6 +209,8 @@ struct ContentView: View {
     @ViewBuilder
     private func row(_ loop: OpenLoop) -> some View {
         LoopRow(loop: loop)
+            .listRowSeparator(.visible)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             .contentShape(Rectangle())
             .onTapGesture { Haptics.tap(); selected = loop }
             .swipeActions(edge: .trailing) {
@@ -227,13 +225,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private func sectionHeader(_ bucket: Theme.Bucket, _ loops: [OpenLoop]) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bucket.title)
-                if let sub = bucket.subtitle {
-                    Text(sub).font(.caption2).foregroundStyle(.secondary).textCase(nil)
-                }
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("# \(headerKey(bucket))")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            Text("\(loops.count)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
             Spacer()
             if bucket == .overdue || bucket == .today {
                 Menu {
@@ -241,11 +238,38 @@ struct ContentView: View {
                     Button("In 3 days") { Task { await model.snoozeAll(loops, days: 3) } }
                     Button("Next week") { Task { await model.snoozeAll(loops, days: 7) } }
                 } label: {
-                    Text("Snooze all").font(.caption).textCase(nil)
+                    Text("snooze all").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 }
             }
-            Text("\(loops.count)").foregroundStyle(.secondary).monospacedDigit()
         }
+        .textCase(nil)
+    }
+
+    /// Lowercase one-word terminal key for a bucket header (`overdue`, `today`, `waiting`…).
+    private func headerKey(_ bucket: Theme.Bucket) -> String {
+        switch bucket {
+        case .overdue: "overdue"
+        case .today: "today"
+        case .upcoming: "upcoming"
+        case .noDate: "no date"
+        case .awaiting: "waiting"
+        }
+    }
+
+    /// Plain monospaced section header: `# key   N   <trailing>`.
+    @ViewBuilder
+    private func terminalHeader(_ title: String, _ count: Int? = nil, trailing: String? = nil, trailingTint: Color = .secondary) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 12, weight: .semibold, design: .monospaced))
+            if let count {
+                Text("\(count)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let trailing {
+                Text(trailing).font(.system(size: 11, design: .monospaced)).foregroundStyle(trailingTint)
+            }
+        }
+        .textCase(nil)
     }
 
     @ViewBuilder
@@ -272,47 +296,22 @@ struct ContentView: View {
             let critical = model.scanWarnings.contains { $0.localizedCaseInsensitiveContains("unavailable") || $0.localizedCaseInsensitiveContains("failed") }
             let tint = critical ? Color.red : Color.orange
             HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 6) {
+                Text("!").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 3) {
                     ForEach(model.scanWarnings, id: \.self) { warning in
-                        Label {
-                            Text(warning).font(.footnote).foregroundStyle(.secondary)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(tint)
-                        }
+                        Text(warning).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 4)
                 Button { model.scanWarnings = [] } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "xmark").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 .accessibilityLabel("Dismiss warning")
             }
-            .padding(12)
-            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal)
-            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(tint.opacity(0.08))
         }
-    }
-
-    /// A protective nudge when too many firm commitments land overdue/today.
-    @ViewBuilder private var overcommitBanner: some View {
-        if heavyDayCount > 5, searchText.isEmpty {
-            HStack(spacing: 8) {
-                Image(systemName: "gauge.with.dots.needle.67percent").foregroundStyle(.orange)
-                Text("Heavy day: \(heavyDayCount) firm commitments due. Consider snoozing the low-priority ones.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal)
-            .padding(.top, 8)
-        }
-    }
-
-    private var heavyDayCount: Int {
-        guard let brief = model.brief else { return 0 }
-        return (brief.overdue + brief.today).filter(\.isFirm).count
     }
 
     @ViewBuilder private var freshnessBar: some View {

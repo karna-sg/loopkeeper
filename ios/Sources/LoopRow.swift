@@ -1,32 +1,39 @@
 import SwiftUI
 
-/// A loop row built for a one-glance read: a leading urgency accent, the kind glyph, the summary,
-/// a metadata line that states direction ("You owe Priya" / "Waiting on Ravi") + source, and a
-/// due label that turns into a colored badge when urgent (tilde-prefixed when the date is inferred).
+/// A loop row, terminal-clean: one dense monospaced line —
+///
+///     ● today  Ship the retry queue patch
+///       you owe Priya · #team
+///
+/// A leading glyph carries urgency (`·` not urgent, `●` today, `!` overdue). The due token is plain
+/// monospaced text, never a capsule. Direction + source sit on a second dim line. No leading color
+/// bar, no kind icon, no card chrome — hierarchy comes from weight + indent.
 struct LoopRow: View {
     let loop: OpenLoop
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let due = Theme.due(loop.dueDate)
-        return HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(Theme.accent(Theme.urgency(loop.dueDate)))
-                .frame(width: 3)
-                .frame(maxHeight: .infinity)
-                .accessibilityHidden(true)
-            Image(systemName: Theme.kindIcon(loop.kind))
-                .font(.body)
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 20)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(loop.summary).lineLimit(2)
-                metadata
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(glyph)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(due.urgent ? due.color : .secondary)
+                    .frame(width: 9, alignment: .center)
+                Text(dueToken(due))
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(due.urgent ? due.color : Theme.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(loop.summary)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
             }
-            Spacer(minLength: 8)
-            dueBadge(due)
+            metadata
+                .padding(.leading, 17)
         }
+        .padding(.vertical, 3)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText(due))
@@ -35,34 +42,34 @@ struct LoopRow: View {
     private var metadata: some View {
         HStack(spacing: 5) {
             Text(directionPhrase)
-                .foregroundStyle(loop.isOwed ? Color.teal : Color.secondary)
+                .foregroundStyle(loop.isOwed ? Color.teal : Theme.secondary)
             Text("·").foregroundStyle(.tertiary)
-            Image(systemName: Theme.channelIcon(loop.channel))
-                .font(.caption2)
-                .foregroundStyle(Theme.channelTint(loop.channel, scheme: scheme))
             Text(channelContext)
             if !loop.isFirm { Text("· tentative").italic() }
             if loop.isSnoozed { Text("· snoozed").foregroundStyle(.tertiary) }
         }
-        .font(.subheadline)
+        .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(.secondary)
         .lineLimit(1)
     }
 
-    @ViewBuilder
-    private func dueBadge(_ due: (label: String, color: Color, urgent: Bool)) -> some View {
-        Text(dueText(due))
-            .font(.caption.weight(due.urgent ? .semibold : .regular))
-            .foregroundStyle(due.color)
-            .padding(.horizontal, due.urgent ? 8 : 0)
-            .padding(.vertical, due.urgent ? 3 : 0)
-            .background(due.urgent ? due.color.opacity(0.18) : .clear, in: Capsule())
-            .fixedSize()
+    /// Urgency glyph: `!` overdue, `●` today, `·` everything else.
+    private var glyph: String {
+        switch Theme.urgency(loop.dueDate) {
+        case .overdue: return "!"
+        case .today: return "●"
+        default: return "·"
+        }
     }
 
-    /// "~Fri" when the date was only inferred by the model, plain otherwise.
-    private func dueText(_ due: (label: String, color: Color, urgent: Bool)) -> String {
-        (loop.isInferredDate && loop.dueDate != nil) ? "~\(due.label)" : due.label
+    /// Compact monospaced due token: `2d` overdue, `today`, the relative/short date otherwise.
+    private func dueToken(_ due: (label: String, color: Color, urgent: Bool)) -> String {
+        let prefix = (loop.isInferredDate && loop.dueDate != nil) ? "~" : ""
+        switch Theme.urgency(loop.dueDate) {
+        case .overdue: return prefix + due.label.replacingOccurrences(of: " overdue", with: "")
+        case .today: return prefix + "today"
+        default: return prefix + due.label
+        }
     }
 
     /// The counterpart name, or nil when it's a placeholder/junk value.
@@ -74,14 +81,14 @@ struct LoopRow: View {
 
     /// The key triage signal: who and which way the obligation runs.
     private var directionPhrase: String {
-        if loop.isOwed { return who.map { "Waiting on \($0)" } ?? "Waiting on someone" }
-        return who.map { "You owe \($0)" } ?? "You owe"
+        if loop.isOwed { return who.map { "waiting on \($0)" } ?? "waiting on someone" }
+        return who.map { "you owe \($0)" } ?? "you owe"
     }
 
     /// Source origin: "#channel" / "DM" for Slack, the provider label for Gmail.
     private var channelContext: String {
         if let label = loop.sourceLabel, !label.isEmpty { return label }
-        return Theme.channelLabel(loop.channel)
+        return Theme.channelLabel(loop.channel).lowercased()
     }
 
     private func accessibilityText(_ due: (label: String, color: Color, urgent: Bool)) -> String {
