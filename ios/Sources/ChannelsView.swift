@@ -5,7 +5,7 @@ import SwiftUI
 struct ChannelsView: View {
     @State private var channels: [SlackChannelDTO] = []
     @State private var selected: Set<String> = []
-    @State private var slackScope = "all_member"
+    @State private var slackScope = "selected"
     @State private var gmailQuery = "in:inbox category:primary newer_than:7d"
     @State private var slackError: String?
     @State private var loading = true
@@ -30,7 +30,7 @@ struct ChannelsView: View {
                     Text("All my channels").tag("all_member")
                     Text("Selected only").tag("selected")
                 }
-                Text("DMs and @mentions are always read. \"All my channels\" also captures @channel / @here asks everywhere you're a member.")
+                Text("DMs and @mentions are always read. \"Selected only\" (recommended) reads just the channels you pick — less noise. \"All my channels\" reads every channel you're in.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let slackError {
                     Label(slackError, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)

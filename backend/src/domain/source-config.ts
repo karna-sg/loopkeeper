@@ -16,7 +16,9 @@ export interface SourceConfig {
 export const DEFAULT_GMAIL_QUERY = "in:inbox category:primary newer_than:7d";
 
 export const DEFAULT_SOURCE_CONFIG: SourceConfig = {
-  slackScope: "all_member",
+  // Default to ONLY the channels the user selected (plus DMs + @mentions, which are always read).
+  // "all_member" pulls every channel you're in — high noise, irrelevant loops — so it's opt-in now.
+  slackScope: "selected",
   slackChannelIds: [],
   gmailQuery: DEFAULT_GMAIL_QUERY,
 };

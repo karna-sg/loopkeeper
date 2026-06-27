@@ -41,6 +41,19 @@ describe("resolveDueDate", () => {
     expect(resolveDueDate("day after tomorrow", THU, TZ).dueDate).toBe("2026-06-27");
   });
 
+  it("anchors a relative phrase to the MESSAGE date, not now", () => {
+    // Scanned on SAT (2026-06-27) but the message was sent THU (2026-06-25): "tomorrow" = Fri 06-26.
+    expect(resolveDueDate("tomorrow", SAT, TZ, THU).dueDate).toBe("2026-06-26");
+    // Hinglish "kal" anchored the same way.
+    expect(resolveDueDate("kal", SAT, TZ, THU).dueDate).toBe("2026-06-26");
+    // A weekday anchors to the message date too: "Friday" from a Thursday = the next day.
+    expect(resolveDueDate("by Friday", SAT, TZ, THU).dueDate).toBe("2026-06-26");
+  });
+
+  it("anchor defaults to now when omitted (back-compat)", () => {
+    expect(resolveDueDate("tomorrow", THU, TZ).dueDate).toBe("2026-06-26");
+  });
+
   it("'before 30 June 2026' -> that date", () => {
     expect(resolveDueDate("before 30 June 2026", THU, TZ)).toEqual({
       dueDate: "2026-06-30",

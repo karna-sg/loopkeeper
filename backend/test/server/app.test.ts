@@ -98,11 +98,14 @@ describe("REST app", () => {
     const list = await app.inject({ method: "GET", url: "/loops" });
     const loops = list.json() as Array<{ id: string; dueDate: string }>;
     expect(loops).toHaveLength(1);
-    expect(loops[0]?.dueDate).toBe("2026-06-26");
+    // "EOD tomorrow" is anchored to the MESSAGE date (2026-06-24), so it resolves to 2026-06-25,
+    // not tomorrow-from-the-scan (2026-06-26). This is the message-date-relative due fix.
+    expect(loops[0]?.dueDate).toBe("2026-06-25");
     const id = loops[0]!.id;
 
     const brief = await app.inject({ method: "GET", url: "/brief" });
-    expect((brief.json() as { upcoming: unknown[] }).upcoming).toHaveLength(1);
+    // Due 2026-06-25 == scan day → it lands in "today" (message-date-anchored "EOD tomorrow").
+    expect((brief.json() as { today: unknown[] }).today).toHaveLength(1);
 
     const done = await app.inject({ method: "POST", url: `/loops/${id}/done` });
     expect(done.json()).toEqual({ ok: true });
@@ -251,7 +254,7 @@ describe("REST app", () => {
     const active = store.list({ status: ["open"] });
     expect(active).toHaveLength(1);
     expect(active[0]?.recurrence).toBe("weekly");
-    expect(active[0]?.dueDate).toBe("2026-07-03"); // 2026-06-26 + 1 week
+    expect(active[0]?.dueDate).toBe("2026-07-02"); // base 2026-06-25 (message-date anchored) + 1 week
   });
 
   it("double /done can't duplicate a recurring loop; undo reopens it and removes the spawn", async () => {

@@ -80,9 +80,11 @@ describe("buildOpenLoops", () => {
     expect(rows[0]?.id).not.toBe(rows[1]?.id);
   });
 
-  it("resolves the due date via the IST parser", () => {
+  it("resolves the due date via the IST parser, anchored to the message's sent date", () => {
+    // message() was sent 2026-06-24 IST; "by EOD tomorrow" → 2026-06-25 (day after it was sent),
+    // not 2026-06-26 (tomorrow-from-NOW). Relative phrases anchor to the message, not the scan.
     const [row] = buildOpenLoops([extracted({ duePhrase: "by EOD tomorrow" })], message(), IDENTITY, { nowIso: NOW });
-    expect(row?.dueDate).toBe("2026-06-26");
+    expect(row?.dueDate).toBe("2026-06-25");
     expect(row?.dueConfidence).toBe("explicit");
   });
 

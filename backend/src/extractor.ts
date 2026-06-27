@@ -47,7 +47,9 @@ export function buildOpenLoops(
   const includeQuote = options.includeQuoteExcerpt ?? false;
   return extracted.map((e) => {
     const hash = commitmentHash(e.commitmentSpan);
-    const { dueDate, dueConfidence } = resolveDueDate(e.duePhrase, options.nowIso, identity.timezone);
+    // Anchor relative phrases ("tomorrow", "kal", "friday") to when the MESSAGE was sent, not the
+    // scan time — so a 3-day-old "I'll send it tomorrow" is due the day after it was sent.
+    const { dueDate, dueConfidence } = resolveDueDate(e.duePhrase, options.nowIso, identity.timezone, message.timestamp);
     const key = {
       channel: message.channel,
       sourceRef: message.sourceRef,
@@ -154,14 +156,37 @@ export interface AnthropicClientOptions {
 /** Default extraction model — balances precision and cost for Phase-0 measurement. */
 export const DEFAULT_EXTRACTION_MODEL = "claude-sonnet-4-6";
 
+/** True when the message text @mentions the user by display name or any alias. */
+function mentionsUser(text: string, identity: UserIdentity): boolean {
+  const names = [identity.displayName, ...identity.aliases].map((n) => n.trim().toLowerCase()).filter(Boolean);
+  if (names.length === 0) return false;
+  const lower = text.toLowerCase();
+  // Match "@name" or a slack id alias "@U123"; plain-name match requires the @ to avoid false hits.
+  return names.some((n) => lower.includes(`@${n}`));
+}
+
 export function renderMessage(message: NormalizedMessage, identity: UserIdentity): string {
   const who = message.fromMe ? `${identity.displayName} (the user)` : message.author;
   // Defence in depth: never send secret-shaped values to the model.
   const body = redactSecrets(message.text);
+  // Ownership context the model needs to decide "is this MINE?": where it came from and whether the
+  // user is personally addressed. A 1:1 DM or an @mention of the user is a strong personal signal;
+  // a plain #channel broadcast usually is not.
+  const isDm = message.sourceLabel === "DM";
+  const isGroupDm = message.sourceLabel === "Group DM";
+  const mentioned = mentionsUser(body, identity);
+  let addressing: string;
+  if (message.fromMe) addressing = "the user wrote this message themselves";
+  else if (isDm) addressing = "a 1:1 direct message TO the user (personally addressed)";
+  else if (mentioned) addressing = "a channel message that @mentions the user by name (personally addressed)";
+  else if (isGroupDm) addressing = "a small group DM the user is part of";
+  else addressing = "a channel message NOT specifically addressed to the user (a broadcast/general post)";
   return [
     `User identity: ${identity.displayName} (aliases: ${identity.aliases.join(", ") || "none"})`,
     `Channel: ${message.channel}`,
+    `Source: ${message.sourceLabel ?? message.channel}`,
     `From: ${who}`,
+    `Addressing: ${addressing}`,
     `Sent: ${message.timestamp}`,
     "",
     body,

@@ -155,8 +155,13 @@ function inferred(date: PlainDate): ResolvedDueDate {
  * @param duePhrase  Raw phrase the model surfaced, or null.
  * @param nowIso     The reference instant (ISO). Pass the run time; deterministic for tests.
  * @param timezone   IANA tz the relative phrase is anchored to (e.g. "Asia/Kolkata").
+ * @param anchorIso  The instant relative phrases ("tomorrow", "kal", "friday") are measured FROM.
+ *                   Defaults to `nowIso`, but the caller should pass the MESSAGE'S sent time so a
+ *                   message from 3 days ago saying "tomorrow" resolves to the day after it was sent,
+ *                   not tomorrow-from-now. Bare month/day years are still inferred against `nowIso`
+ *                   (so a "Jul 1" already in the past lands next year, not next-year-from-the-message).
  */
-export function resolveDueDate(duePhrase: string | null, nowIso: string, timezone: string): ResolvedDueDate {
+export function resolveDueDate(duePhrase: string | null, nowIso: string, timezone: string, anchorIso?: string): ResolvedDueDate {
   if (!duePhrase) return NONE;
   const raw = duePhrase.toLowerCase().trim();
   if (!raw) return NONE;
@@ -167,7 +172,10 @@ export function resolveDueDate(duePhrase: string | null, nowIso: string, timezon
     return explicit({ y: Number(iso[1]), m: Number(iso[2]) - 1, d: Number(iso[3]) });
   }
 
-  const today = plainDateInTz(nowIso, timezone);
+  // Relative phrases are anchored to the message's sent date (anchorIso); bare month/day year
+  // inference still uses "now" so a long-past date doesn't get pushed an extra year.
+  const today = plainDateInTz(anchorIso ?? nowIso, timezone);
+  const todayNow = plainDateInTz(nowIso, timezone);
 
   // Strip leading prepositions; remember if it was a "before <X>" phrasing.
   let phrase = raw.replace(/^(?:by|due|due by|due on|before|on or before|no later than)\s+/i, "").trim();
@@ -202,7 +210,7 @@ export function resolveDueDate(duePhrase: string | null, nowIso: string, timezon
   if (dmy?.[1] && dmy[2] && dmy[2] in MONTHS) {
     const d = Number(dmy[1]);
     const m = MONTHS[dmy[2]] as number;
-    const y = dmy[3] ? normalizeYear(Number(dmy[3])) : inferYear(today, m, d);
+    const y = dmy[3] ? normalizeYear(Number(dmy[3])) : inferYear(todayNow, m, d);
     return explicit({ y, m, d });
   }
   // Month-Day(-Year): "Jul 1", "july 1st", "jun-29-2026".
@@ -210,7 +218,7 @@ export function resolveDueDate(duePhrase: string | null, nowIso: string, timezon
   if (mdy?.[1] && mdy[2] && mdy[1] in MONTHS) {
     const m = MONTHS[mdy[1]] as number;
     const d = Number(mdy[2]);
-    const y = mdy[3] ? normalizeYear(Number(mdy[3])) : inferYear(today, m, d);
+    const y = mdy[3] ? normalizeYear(Number(mdy[3])) : inferYear(todayNow, m, d);
     return explicit({ y, m, d });
   }
 

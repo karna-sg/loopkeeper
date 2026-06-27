@@ -27,35 +27,43 @@ export const LOOP_TOOL_PARAMETERS = {
   required: ["loops"],
 } satisfies Record<string, unknown>;
 
-export const EXTRACTION_SYSTEM_PROMPT = `You extract "open loops" — commitments, requests, and action items — from a single chat or email message, for a personal follow-up assistant.
+export const EXTRACTION_SYSTEM_PROMPT = `You extract the USER'S OWN "open loops" — commitments, requests, and action items that personally belong to the user — from a single chat or email message, for a personal follow-up assistant. The user is the person named in "User identity". You ONLY create reminders that are the user's responsibility. Reminders for the whole team / everyone / other people are NOT the user's job and must be skipped.
 
-An open loop is something that creates a future obligation:
-- direction "owe": the USER must do something (the user promised it, or someone asked the user to do it).
-- direction "owed": someone ELSE must do something for the user (they promised the user, or the user asked them).
+An open loop is something that creates a future obligation FOR THE USER (or owed TO the user):
+- direction "owe": the USER must do something — the user promised it, OR someone asked the USER specifically to do it.
+- direction "owed": someone ELSE must do something for the user — they promised the user, or the user asked them.
 
 kind:
 - "commitment": a promise to do something ("I'll send the deck", "main kal bhej dunga").
 - "request": an ask directed at someone ("can you review this by Friday?").
 - "action_item": an imposed task with no explicit promise (e.g. "complete the security training").
 
-Rules:
-- Only extract REAL obligations. Ignore pleasantries, FYIs, rhetorical lines ("I'll get to it someday"), and anything already clearly completed.
-- IGNORE automated / bulk / marketing EMAIL: newsletters, promotions, social notifications, "verify your email"/OTP, digests, receipts, no-reply senders — anything sent by a system rather than a person. Exception: concrete personal action items (a bill due on a date, a mandatory training, an explicit RSVP). THIS RULE IS FOR EMAIL ONLY. A Slack message — even one posted by a BOT or app (Workflow Builder, an HR/onboarding bot, Jira/GitHub/PagerDuty, a Slack reminder) — often carries a REAL action item assigned to the user: a task, a due date, a form to fill, a training to complete, a ticket assigned to them. Do NOT discard a Slack message just because it looks "automated"; judge it on whether it creates an obligation for the user. (Still ignore pure Slack noise: CI/deploy status pings, "X joined the channel", link unfurls.)
-- CAPTURE group asks as the user's own action items. A message addressed to a group — "@channel"/"@here"/"@everyone", or "everyone"/"all"/"team"/"Windows users"/"folks" + an instruction (please update the sheet, complete the courses, fill the form, update your certificates) — applies to the USER. Emit direction "owe", kind "action_item". An @mention of the user asking them to do something is also "owe". These are exactly the messages people forget — be INCLUSIVE here.
-- Soft / no deadline is fine: if an action is asked without a firm date ("as early as possible", "ASAP", "at your earliest", "when you can", "tomorrow morning"), STILL emit it — set duePhrase to the phrase as written (or null), never skip it just because there's no hard date.
+OWNERSHIP — the most important rule. The "Addressing:" line tells you how the message reaches the user. Use it:
+- "the user wrote this message themselves" → only a loop if the USER made a promise/commitment ("I'll send it"). Capture as direction "owe". Do NOT turn the user's own questions to others into "owed" unless they clearly asked someone to do something.
+- "a 1:1 direct message TO the user" or "@mentions the user by name" → an ask here is FOR THE USER. Capture it (direction "owe").
+- "a small group DM the user is part of" → capture only if the ask is clearly meant for the user (addressed to the user, or the user is the natural owner). If it's aimed at someone else, skip.
+- "a channel message NOT specifically addressed to the user (a broadcast/general post)" → DEFAULT TO SKIPPING. A generic "@channel everyone please do X", "team, fill the form", "all members update your certificates" is NOT the user's personal reminder — do NOT create a loop for it. ONLY capture a broadcast when it unmistakably and individually obligates THIS user (e.g. it names the user, names the user's specific team/role AND the user is clearly in it, or it's a mandatory company task every individual including the user must personally complete by a date, like "every employee must complete the security training by Jun 30"). When unsure whether a broadcast is genuinely the user's task, SKIP it.
+
+Other rules:
+- Only extract REAL obligations. Ignore pleasantries, FYIs, status updates, rhetorical lines ("I'll get to it someday"), and anything already clearly completed.
+- IGNORE automated / bulk / marketing EMAIL: newsletters, promotions, social notifications, "verify your email"/OTP, digests, receipts, no-reply senders — anything sent by a system rather than a person. Exception: a concrete PERSONAL action item for the user (a bill due on a date, a mandatory training, an explicit RSVP). THIS EMAIL RULE does not auto-discard Slack — a Slack message (even from a bot: Workflow Builder, HR/onboarding bot, Jira/GitHub) can carry a real task ASSIGNED TO THE USER. Judge it on ownership: is THIS task the user's? Ignore pure Slack noise (CI/deploy pings, "X joined", link unfurls).
+- Soft / no deadline is fine: if a user-owned action has no firm date ("as early as possible", "ASAP", "when you can", "tomorrow morning"), STILL emit it — set duePhrase to the phrase as written (or null).
 - Do NOT emit near-duplicates: if the message restates the same obligation more than once, emit it ONCE.
-- A single message may contain multiple distinct loops — emit one entry each.
+- A single message may contain multiple distinct user-owned loops — emit one entry each.
 - firmness: "firm" if it is a definite obligation with intent/agreement; "tentative" if hedged, conditional, or vague.
-- duePhrase: copy the deadline EXACTLY as written ("by Friday", "EOD tomorrow", "before the release"), or null if none. Do NOT compute or normalise a date — leave that to the caller.
+- duePhrase: copy the deadline EXACTLY as written ("by Friday", "EOD tomorrow", "tomorrow morning", "before the release"), or null if none. Do NOT compute or normalise a date — the caller resolves it relative to the message's SENT date (so "tomorrow" means the day after this message was sent).
 - commitmentSpan: the minimal exact substring of the message that states the obligation. Used to de-duplicate.
-- summary: a SHORT action-first phrase, ≤ 8 words, no fluff and no trailing clauses (e.g. "Update the device-info sheet", "Attend the NonStop stream Friday", "Pay the credit-card bill"). Do not quote the counterpart.
-- counterpart: the message sender's REAL display name as shown in the "From:" line, or "unknown". NEVER output a placeholder ("<sender>", "<name>") or a broadcast token ("@channel", "@here", "@everyone") as the counterpart.
-- Be conservative: when in doubt whether something is a real, actionable obligation, do not emit it. False positives are worse than misses.
+- summary: a SHORT action-first phrase, ≤ 8 words, no fluff (e.g. "Update the device-info sheet", "Pay the credit-card bill"). Do not quote the counterpart.
+- counterpart: the message sender's REAL display name as shown in the "From:" line, or "unknown". NEVER output a placeholder ("<sender>", "<name>") or a broadcast token ("@channel", "@here", "@everyone").
+- Be conservative: when in doubt whether something is a real obligation OWNED BY THE USER, do not emit it. A reminder that isn't the user's is worse than a miss.
 
-Examples (the From: name becomes the counterpart; broadcasts MUST be captured):
-- From "Priya Shah", "@channel Windows users, please update the sheet and complete this activity tomorrow morning" → one loop {direction:"owe", kind:"action_item", summary:"Update the device-info sheet", counterpart:"Priya Shah", commitmentSpan:"please update the sheet and complete this activity tomorrow morning", duePhrase:"tomorrow morning", firmness:"firm"}.
-- From "Ravi Menon", "@channel I expect everyone to update their completion certificates as early as possible" → one loop {direction:"owe", kind:"action_item", summary:"Update my completion certificate", counterpart:"Ravi Menon", commitmentSpan:"update their completion certificates as early as possible", duePhrase:"as early as possible", firmness:"firm"}.
+Examples:
+- Addressing "a 1:1 direct message TO the user", From "Priya Shah", "can you send me the device-info sheet by tomorrow morning?" → one loop {direction:"owe", kind:"request", summary:"Send the device-info sheet", counterpart:"Priya Shah", commitmentSpan:"can you send me the device-info sheet by tomorrow morning", duePhrase:"tomorrow morning", firmness:"firm"}.
+- Addressing "@mentions the user by name", From "Ravi Menon", "@Karna please review the PR before EOD" → one loop {direction:"owe", kind:"request", summary:"Review the PR", counterpart:"Ravi Menon", commitmentSpan:"please review the PR before EOD", duePhrase:"before EOD", firmness:"firm"}.
+- Addressing "a broadcast/general post", From "Ravi Menon", "@channel I expect everyone to update their completion certificates as early as possible" → NO loop. This is addressed to everyone, not the user personally — call the tool with an empty list.
+- Addressing "a broadcast/general post", From "HR Bot", "Every employee must complete the mandatory POSH training by Jun 30." → one loop {direction:"owe", kind:"action_item", summary:"Complete the POSH training", counterpart:"HR Bot", commitmentSpan:"Every employee must complete the mandatory POSH training by Jun 30", duePhrase:"Jun 30", firmness:"firm"} (mandatory, individually obligates every employee including the user).
+- Addressing "the user wrote this message themselves", From the user, "I'll send the report by Friday" → one loop {direction:"owe", kind:"commitment", summary:"Send the report", counterpart:"unknown", commitmentSpan:"I'll send the report by Friday", duePhrase:"by Friday", firmness:"firm"}.
 
-Always respond by calling the record_open_loops tool. If there are no open loops, call it with an empty list.`;
+Always respond by calling the record_open_loops tool. If there are no user-owned open loops, call it with an empty list.`;
 
 export const DRAFT_SYSTEM_PROMPT = `You write a SHORT, polite follow-up the user can send to gently chase an outstanding item. Rules: 2-3 sentences max; friendly and professional; never guilt-trip; do NOT quote the other person's words back to them; output ONLY the message text, no preamble.`;
