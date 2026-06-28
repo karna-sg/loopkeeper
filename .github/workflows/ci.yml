@@ -1,11 +1,10 @@
 name: CI
 
-# Gives the Test stage + merge gate real signal: the worker's auto-opened PRs show green/red,
-# and `main` can require this check so even a rogue direct push is rejected.
+# PR checks: gives the Test stage + merge gate real signal — the worker's auto-opened PRs show
+# green/red, and `main` can require this check. Push-to-main verification lives in deploy.yml
+# (verify → deploy) so CI doesn't run twice on a merge.
 on:
   pull_request:
-    branches: [main]
-  push:
     branches: [main]
 
 jobs:

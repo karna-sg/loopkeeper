@@ -1,0 +1,49 @@
+name: Deploy
+
+# CD: on every push to main (i.e. a merged PR), verify the build then deploy to the prod VM.
+# LoopKeeper's deploy stage OBSERVES this run (the deploy-status scheduler polls it by commit SHA)
+# and surfaces CI + CD status in the app — it no longer SSH-deploys itself.
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time; never cancel an in-flight deploy.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r lint
+      - run: pnpm -r test
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      # The VM's authorized_keys pins this key to a forced command (ops/redeploy.sh), so the client
+      # command is ignored — SSH-ing in IS the deploy. redeploy.sh exits non-zero on failure, which
+      # fails this job (→ the observed CD conclusion becomes "failure").
+      - name: Redeploy on the prod VM
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"

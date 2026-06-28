@@ -14,6 +14,8 @@ export interface OrchestratorDeps {
   github: GithubPort | null;
   deployer: DeployerPort | null;
   deployEnabled: boolean;
+  /** `github-actions` = CD runs in GH Actions and the deploy-status job observes it; `ssh` = legacy worker redeploy. */
+  deployMode: "github-actions" | "ssh";
   deployEnv: string;
   now: () => string;
 }
@@ -285,13 +287,30 @@ export class Orchestrator {
   }
 
   async #handleDeploy(taskId: string): Promise<void> {
-    const { engStore, deployer, deployEnabled, deployEnv, now } = this.#d;
-    if (!deployer || !deployEnabled) return; // deploy disabled — leave at merge:merged (manual deploy)
+    const { engStore, deployer, deployEnabled, deployMode, deployEnv, now } = this.#d;
+    if (!deployEnabled) return; // deploy disabled — leave at merge:merged (manual deploy)
+
+    if (deployMode === "github-actions") {
+      // CD is owned by GitHub Actions (triggered by the merge → push to main). We only OBSERVE:
+      // record the merge commit + mark deploying; the `deploy-status` scheduler polls the GH run and
+      // finalizes deployed/failed. No SSH, no deploy key on the worker.
+      const sha = this.#require(taskId).artifacts.merge?.commitSha ?? null;
+      this.#advance(taskId, { stage: "deploy", status: "deploying" });
+      engStore.setDeployArtifact(
+        taskId,
+        { env: deployEnv, status: "deploying", startedTs: now(), finishedTs: null, commitSha: sha, runUrl: null, ci: null, cd: null, logTail: "waiting for GitHub Actions deploy run" },
+        now(),
+      );
+      return;
+    }
+
+    // Legacy ssh mode: the worker triggers the redeploy directly.
+    if (!deployer) return;
     this.#advance(taskId, { stage: "deploy", status: "deploying" });
     const out = await deployer.redeploy();
     engStore.setDeployArtifact(
       taskId,
-      { env: deployEnv, status: out.ok ? "deployed" : "failed", startedTs: now(), finishedTs: now(), commitSha: out.sha, logTail: out.logTail ? redactSecrets(out.logTail) : null },
+      { env: deployEnv, status: out.ok ? "deployed" : "failed", startedTs: now(), finishedTs: now(), commitSha: out.sha, runUrl: null, ci: null, cd: null, logTail: out.logTail ? redactSecrets(out.logTail) : null },
       now(),
     );
     this.#advance(taskId, { stage: "deploy", status: out.ok ? "deployed" : "failed" });

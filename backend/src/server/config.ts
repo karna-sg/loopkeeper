@@ -29,6 +29,9 @@ export interface GithubConfig {
 
 /** SSH redeploy target (the worker runs the redeploy after a gated merge). Null = disabled. */
 export interface DeployConfig {
+  /** `github-actions` (default) = GH Actions runs CD on push to main, LoopKeeper observes the run;
+   *  `ssh` = legacy worker-triggered SSH redeploy. */
+  mode: "github-actions" | "ssh";
   sshHost: string;
   sshUser: string;
   keyPath: string;
@@ -152,10 +155,13 @@ function envGithub(env: NodeJS.ProcessEnv): GithubConfig | null {
 }
 
 function envDeploy(env: NodeJS.ProcessEnv): DeployConfig | null {
+  const mode = env.DEPLOY_MODE === "ssh" ? "ssh" : "github-actions";
   const sshHost = env.DEPLOY_SSH_HOST;
-  if (!sshHost) return null;
+  // ssh mode needs a host; github-actions mode owns the SSH inside the workflow, so nothing here.
+  if (mode === "ssh" && !sshHost) return null;
   return {
-    sshHost,
+    mode,
+    sshHost: sshHost ?? "",
     sshUser: env.DEPLOY_SSH_USER ?? "deploy",
     keyPath: env.DEPLOY_SSH_KEY_PATH ?? "",
     remotePath: env.DEPLOY_REMOTE_PATH ?? "/opt/loopkeeper",

@@ -68,6 +68,12 @@ struct DeployArtifact: Codable, Hashable {
     let status: String?
     let logTail: String?
     let commitSha: String?
+    /// GitHub Actions deploy-run URL (CD pipeline observed for the merge commit).
+    let runUrl: String?
+    /// CI (verify) job conclusion — "success" / "failure" / nil while running.
+    let ci: String?
+    /// CD (deploy) job conclusion.
+    let cd: String?
 }
 
 struct TaskArtifacts: Codable, Hashable {

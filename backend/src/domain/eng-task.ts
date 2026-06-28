@@ -173,7 +173,13 @@ export interface DeployArtifact {
   startedTs: string | null;
   finishedTs: string | null;
   commitSha: string | null;
-  /** Truncated, redacted redeploy output (git pull + compose up). */
+  /** GitHub Actions deploy-run URL (CD pipeline observed for the merge commit). */
+  runUrl: string | null;
+  /** CI (verify) job conclusion — `success` | `failure` | `null` while running. */
+  ci: string | null;
+  /** CD (deploy) job conclusion. */
+  cd: string | null;
+  /** Truncated, redacted redeploy output (ssh mode) or a status note (github-actions mode). */
   logTail: string | null;
 }
 

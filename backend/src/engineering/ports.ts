@@ -88,12 +88,25 @@ export interface PrState {
   comments: ReviewComment[];
 }
 
-/** GitHub REST operations (backend-initiated: create / poll / merge). Reconcile-before-act. */
+/** A GitHub Actions run observed for the deploy stage (CD). Status/conclusion mirror the Actions API. */
+export interface DeployRun {
+  /** Run status: `queued` | `in_progress` | `completed`. */
+  status: string;
+  /** Set once completed: `success` | `failure` | `cancelled` | `timed_out` | `skipped` | `null`. */
+  conclusion: string | null;
+  htmlUrl: string | null;
+  /** Per-job status — typically the `verify` (CI) and `deploy` (CD) jobs of the run. */
+  jobs: { name: string; status: string; conclusion: string | null }[];
+}
+
+/** GitHub REST operations (backend-initiated: create / poll / merge / observe CD). Reconcile-before-act. */
 export interface GithubPort {
   findOpenPr(repo: string, head: string): Promise<PullRequest | null>;
   createPr(args: { repo: string; head: string; base: string; title: string; body: string }): Promise<PullRequest>;
   getPr(repo: string, num: number): Promise<PrState>;
   merge(repo: string, num: number, method: "merge" | "squash" | "rebase"): Promise<{ sha: string; merged: boolean }>;
+  /** Latest GitHub Actions deploy run for a commit (CD observation). `null` if no run exists yet. */
+  getDeployRun(repo: string, sha: string): Promise<DeployRun | null>;
 }
 
 export interface DeployOutcome {
