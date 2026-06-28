@@ -4,7 +4,8 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @AppStorage("loopkeeper.sortByPriority") private var sortByPriority = false
-    @AppStorage("loopkeeper.focusExpanded") private var focusExpanded = true
+    /// Comma-separated keys of sections the user has collapsed (persisted).
+    @AppStorage("loopkeeper.collapsedSections") private var collapsedCSV = ""
     @State private var selected: OpenLoop?
     @State private var selectedTask: EngTask?
     @State private var searchText = ""
@@ -156,35 +157,33 @@ struct ContentView: View {
         List {
             if !focusNow.isEmpty {
                 Section {
-                    if focusExpanded { ForEach(focusNow) { row($0) } }
+                    if !isCollapsed("focus") { ForEach(focusNow) { row($0) } }
                 } header: {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.15)) { focusExpanded.toggle() }
+                        withAnimation(.easeInOut(duration: 0.15)) { toggleCollapsed("focus") }
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: focusExpanded ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
-                            terminalHeader("# focus", focusNow.count)
-                        }
-                        .contentShape(Rectangle())
+                        HStack(spacing: 6) { collapseChevron("focus"); terminalHeader("# focus", focusNow.count) }
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
             if !model.engineeringTasks.isEmpty || model.jiraConnected {
                 Section {
-                    ForEach(model.sortedTasks) { task in
-                        JiraTaskRow(task: task)
-                            .listRowSeparator(.visible)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                            .contentShape(Rectangle())
-                            .onTapGesture { Haptics.tap(); selectedTask = task }
-                    }
-                    if model.engineeringTasks.isEmpty {
-                        Text(model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    if !isCollapsed("tasks") {
+                        ForEach(model.sortedTasks) { task in
+                            JiraTaskRow(task: task)
+                                .listRowSeparator(.visible)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                .contentShape(Rectangle())
+                                .onTapGesture { Haptics.tap(); selectedTask = task }
+                        }
+                        if model.engineeringTasks.isEmpty {
+                            Text(model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        }
                     }
                 } header: {
                     tasksHeader
@@ -216,7 +215,7 @@ struct ContentView: View {
     private func section(_ bucket: Theme.Bucket, _ loops: [OpenLoop]) -> some View {
         if !loops.isEmpty {
             Section {
-                ForEach(loops) { row($0) }
+                if !isCollapsed(headerKey(bucket)) { ForEach(loops) { row($0) } }
             } header: {
                 sectionHeader(bucket, loops)
             }
@@ -242,13 +241,23 @@ struct ContentView: View {
 
     @ViewBuilder
     private func sectionHeader(_ bucket: Theme.Bucket, _ loops: [OpenLoop]) -> some View {
+        let key = headerKey(bucket)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("# \(headerKey(bucket))")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Theme.headerAccent)
-            Text("\(loops.count)")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { toggleCollapsed(key) }
+            } label: {
+                HStack(spacing: 6) {
+                    collapseChevron(key)
+                    Text("# \(key)")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.headerAccent)
+                    Text("\(loops.count)")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             Spacer()
             if bucket == .overdue || bucket == .today {
                 Menu {
@@ -274,6 +283,21 @@ struct ContentView: View {
         }
     }
 
+    // MARK: collapsible sections
+
+    private func isCollapsed(_ key: String) -> Bool {
+        collapsedCSV.split(separator: ",").contains(Substring(key))
+    }
+    private func toggleCollapsed(_ key: String) {
+        var set = Set(collapsedCSV.split(separator: ",").map(String.init))
+        if set.contains(key) { set.remove(key) } else { set.insert(key) }
+        collapsedCSV = set.sorted().joined(separator: ",")
+    }
+    @ViewBuilder private func collapseChevron(_ key: String) -> some View {
+        Image(systemName: isCollapsed(key) ? "chevron.right" : "chevron.down")
+            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary).frame(width: 10)
+    }
+
     /// Plain monospaced section header: `# key   N   <trailing>`.
     @ViewBuilder
     private func terminalHeader(_ title: String, _ count: Int? = nil, trailing: String? = nil, trailingTint: Color = .secondary) -> some View {
@@ -297,14 +321,23 @@ struct ContentView: View {
     @ViewBuilder
     private var tasksHeader: some View {
         HStack(spacing: 8) {
-            Text("# tasks")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Theme.headerAccent)
-            if model.tasksNeedingAction > 0 {
-                Text("\(model.tasksNeedingAction) need you")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.orange)
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { toggleCollapsed("tasks") }
+            } label: {
+                HStack(spacing: 6) {
+                    collapseChevron("tasks")
+                    Text("# tasks")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.headerAccent)
+                    if model.tasksNeedingAction > 0 {
+                        Text("\(model.tasksNeedingAction) need you")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             Spacer()
             Button { Task { await model.syncTasks() } } label: {
                 HStack(spacing: 5) {
