@@ -104,8 +104,12 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
 
   app.get("/tasks/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const task = engStore.get(id);
-    if (!task) return reply.code(404).send({ error: "not found" });
+    const dbRow = engStore.get(id);
+    if (!dbRow) return reply.code(404).send({ error: "not found" });
+    // Always reflect current Jira: re-fetch THIS issue live and overlay its metadata onto the pipeline row.
+    // getTask falls back to the DB row if Jira is unavailable, so the detail view never 5xx's on a Jira blip.
+    const jiraSync = deps.jiraSync;
+    const task = jiraSync ? await jiraSync.getTask(dbRow) : dbRow;
     return { task, events: engStore.events(id) };
   });
 

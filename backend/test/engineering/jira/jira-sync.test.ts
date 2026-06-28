@@ -9,10 +9,17 @@ const OPTS = { siteUrl: "https://acme.atlassian.net", repo: "karna/loopkeeper", 
 
 class FakeJiraClient implements JiraClient {
   callCount = 0;
+  getCount = 0;
+  throwOnGet = false;
   constructor(private issues: JiraIssue[]) {}
   async searchAssigned(): Promise<JiraIssue[]> {
     this.callCount++;
     return this.issues;
+  }
+  async getIssue(idOrKey: string): Promise<JiraIssue | null> {
+    this.getCount++;
+    if (this.throwOnGet) throw new Error("jira unavailable");
+    return this.issues.find((i) => i.id === idOrKey || i.key === idOrKey) ?? null;
   }
   async currentUserAccountId(): Promise<string> {
     return "acct-1";
@@ -120,6 +127,51 @@ describe("JiraSyncService", () => {
     expect(tasks[0]?.stage).toBe("plan");
     expect(tasks[0]?.status).toBe("not_started");
     expect(store.list()).toHaveLength(0); // not written to DB until an explicit sync
+  });
+
+  it("getTask: overlays live Jira metadata onto the DB pipeline row (fresh, by jira_id)", async () => {
+    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "Old title", "To Do", "10001")]), store, OPTS).run({ nowIso: NOW });
+    const id = store.getByKey("LK-1")!.id;
+    store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    const db = store.get(id)!;
+
+    const client = new FakeJiraClient([issue("LK-1", "New title", "In Progress", "10001")]);
+    const merged = await new JiraSyncService(client, store, OPTS).getTask(db);
+    expect(client.getCount).toBe(1); // fetched THIS issue live, no cache
+    expect(merged.title).toBe("New title"); // live metadata overlaid
+    expect(merged.jiraStatus).toBe("In Progress");
+    expect(merged.status).toBe("in_progress"); // pipeline state preserved from DB
+    expect(merged.id).toBe(db.id);
+  });
+
+  it("getTask: falls back to the DB row when Jira is unavailable (never throws)", async () => {
+    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "Title", "To Do", "10001")]), store, OPTS).run({ nowIso: NOW });
+    const db = store.getByKey("LK-1")!;
+    const client = new FakeJiraClient([issue("LK-1", "Changed", "In Progress", "10001")]);
+    client.throwOnGet = true;
+    const result = await new JiraSyncService(client, store, OPTS).getTask(db);
+    expect(result).toEqual(db); // unchanged fallback
+  });
+
+  it("getTask: returns the DB row when the issue is gone (null)", async () => {
+    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "Title", "To Do", "10001")]), store, OPTS).run({ nowIso: NOW });
+    const db = store.getByKey("LK-1")!;
+    const result = await new JiraSyncService(new FakeJiraClient([]), store, OPTS).getTask(db);
+    expect(result.title).toBe(db.title); // DB row, unchanged
+  });
+
+  it("getTask + listTasks produce an identical metadata overlay (no drift)", async () => {
+    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "Old", "To Do", "10001")]), store, OPTS).run({ nowIso: NOW });
+    const id = store.getByKey("LK-1")!.id;
+    store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    const db = store.get(id)!;
+
+    const sync = new JiraSyncService(new FakeJiraClient([issue("LK-1", "Fresh", "In Progress", "10001")]), store, OPTS);
+    const fromList = (await sync.listTasks()).find((t) => t.jiraKey === "LK-1")!;
+    const fromGet = await sync.getTask(db);
+    for (const k of ["jiraKey", "jiraUrl", "title", "description", "acceptanceCriteria", "labels", "components", "assignee", "jiraStatus"] as const) {
+      expect(fromGet[k]).toEqual(fromList[k]);
+    }
   });
 
   it("listTasks: serves cache within TTL, bypasses cache for run()", async () => {
