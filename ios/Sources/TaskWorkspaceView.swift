@@ -20,6 +20,7 @@ struct TaskWorkspaceView: View {
     @State private var editingPlan = false
     @State private var inFlight = false
     @State private var pollTask: Task<Void, Never>?
+    @State private var requirementsExpanded = true
 
     // Terminal-clean type scale. One face (monospaced), hierarchy via weight + dim.
     private let mono = Font.system(size: 13, design: .monospaced)
@@ -65,7 +66,7 @@ struct TaskWorkspaceView: View {
                 Text(Theme.stageTitle(task.stage).lowercased()).font(mono).foregroundStyle(.secondary)
                 Text("·").foregroundStyle(.tertiary)
                 Text(Theme.statusToken(task.stage, task.status))
-                    .font(mono).foregroundStyle(Theme.statusTint(task.status))
+                    .font(mono).foregroundStyle(Theme.tickTint(task.status))
                 Spacer(minLength: 0)
                 if let url = task.jiraUrl, let u = URL(string: url) {
                     Button { openURL(u) } label: { Image(systemName: "arrow.up.right.square") }
@@ -103,17 +104,30 @@ struct TaskWorkspaceView: View {
     @ViewBuilder private func requirements(_ task: EngTask) -> some View {
         if hasRequirements(task) {
             VStack(alignment: .leading, spacing: 8) {
-                sectionLabel("# requirements")
-                if let d = task.description, !d.isEmpty {
-                    MarkdownText(source: d)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { requirementsExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: requirementsExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary).frame(width: 10)
+                        sectionLabel("# requirements")
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
                 }
-                if let ac = task.acceptanceCriteria, !ac.isEmpty {
-                    Text("acceptance:").font(monoSmall).foregroundStyle(.secondary).padding(.top, 2)
-                    MarkdownText(source: ac)
-                }
-                if let labels = task.labels, !labels.isEmpty {
-                    Text(labels.map { "#\($0)" }.joined(separator: "  "))
-                        .font(monoSmall).foregroundStyle(.tertiary)
+                .buttonStyle(.plain)
+                if requirementsExpanded {
+                    if let d = task.description, !d.isEmpty {
+                        MarkdownText(source: d)
+                    }
+                    if let ac = task.acceptanceCriteria, !ac.isEmpty {
+                        Text("acceptance:").font(monoSmall).foregroundStyle(.secondary).padding(.top, 2)
+                        MarkdownText(source: ac)
+                    }
+                    if let labels = task.labels, !labels.isEmpty {
+                        Text(labels.map { "#\($0)" }.joined(separator: "  "))
+                            .font(monoSmall).foregroundStyle(.tertiary)
+                    }
                 }
             }
         }
@@ -426,14 +440,14 @@ private struct StageBlock: View {
                         .frame(width: 10)
                     Text(Theme.stageGlyph(status))
                         .font(mono)
-                        .foregroundStyle(Theme.statusTint(status))
+                        .foregroundStyle(Theme.tickTint(status))
                         .frame(width: 10, alignment: .center)
                     Text(Theme.stageKey(stage))
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundStyle(stageNameColor)
                     Text(Theme.statusToken(stage, status))
                         .font(mono)
-                        .foregroundStyle(Theme.statusTint(status))
+                        .foregroundStyle(Theme.tickTint(status))
                     Spacer(minLength: 0)
                     if !hasContent {
                         Text("—").font(monoSmall).foregroundStyle(.tertiary)

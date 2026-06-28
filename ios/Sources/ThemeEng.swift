@@ -141,6 +141,19 @@ extension Theme {
         }
     }
 
+    /// Color for the status tick/glyph: GREEN for success, RED for failure, orange for a pending
+    /// human gate, blue while running, neutral when not started. Used for the ✓/✗ marks on Home rows
+    /// and pipeline stages so success/failure read at a glance.
+    static func tickTint(_ status: String) -> Color {
+        switch status {
+        case "failed", "blocked", "cancelled": return .red
+        case "in_progress", "creating", "merging", "deploying", "comments_addressed": return .blue
+        case "completed_unapproved", "proposed", "ready", "comments_received", "awaiting_review": return .orange
+        case "approved", "done", "passed", "created", "merged", "deployed", "verified", "rolled_back": return .green
+        default: return secondary
+        }
+    }
+
     /// A one-glyph terminal marker for a stage's state: `✓` done, `…` running, `✗` failed,
     /// `●` needs you, `·` not started. Pure text, monospaced-friendly.
     static func stageGlyph(_ status: String) -> String {

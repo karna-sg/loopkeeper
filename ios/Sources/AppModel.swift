@@ -231,26 +231,37 @@ final class AppModel {
     // MARK: - Engineering (Phase 2)
 
     /// Tasks sorted for Home: needs-action first, then running, then most-recently-updated.
+    /// Stable, predictable order: tasks needing you first, then by Jira key NUMERICALLY (LP-2 before
+    /// LP-10). No `updatedTs` tiebreak — that made rows shuffle as a running task ticked.
     var sortedTasks: [EngTask] {
         engineeringTasks.sorted { a, b in
             if a.needsAction != b.needsAction { return a.needsAction }
-            if a.isRunning != b.isRunning { return a.isRunning }
-            return (a.updatedTs ?? "") > (b.updatedTs ?? "")
+            let ka = Self.keyOrder(a.jiraKey), kb = Self.keyOrder(b.jiraKey)
+            return ka.0 != kb.0 ? ka.0 < kb.0 : ka.1 < kb.1
         }
+    }
+
+    /// Split a Jira key into (prefix, number) so keys sort numerically: ("LP", 2) < ("LP", 10).
+    private static func keyOrder(_ key: String) -> (String, Int) {
+        let parts = key.split(separator: "-")
+        let num = Int(parts.last ?? "") ?? Int.max
+        let prefix = parts.count > 1 ? parts.dropLast().joined(separator: "-") : key
+        return (prefix, num)
     }
 
     var tasksNeedingAction: Int { engineeringTasks.filter(\.needsAction).count }
 
     func refreshTasks() async { engineeringTasks = (try? await api.tasks()) ?? engineeringTasks }
 
-    /// Fetch a single task's detail + timeline (for the workspace + its live poll).
+    /// Fetch a single task's detail + timeline (for the workspace + its live poll). Best-effort: a
+    /// transient or teardown failure (e.g. the 3s poll firing as the sheet closes) returns nil WITHOUT
+    /// raising the global alert — otherwise closing a running task pops a spurious "something went wrong".
     func taskDetail(_ id: String) async -> TaskDetailResponse? {
         do {
             let detail = try await api.taskDetail(id)
             upsertTask(detail.task)
             return detail
         } catch {
-            errorMessage = friendly(error)
             return nil
         }
     }

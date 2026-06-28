@@ -4,6 +4,7 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @AppStorage("loopkeeper.sortByPriority") private var sortByPriority = false
+    @AppStorage("loopkeeper.focusExpanded") private var focusExpanded = true
     @State private var selected: OpenLoop?
     @State private var selectedTask: EngTask?
     @State private var searchText = ""
@@ -155,9 +156,19 @@ struct ContentView: View {
         List {
             if !focusNow.isEmpty {
                 Section {
-                    ForEach(focusNow) { row($0) }
+                    if focusExpanded { ForEach(focusNow) { row($0) } }
                 } header: {
-                    terminalHeader("# focus")
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { focusExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: focusExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                            terminalHeader("# focus", focusNow.count)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             if !model.engineeringTasks.isEmpty || model.jiraConnected {
