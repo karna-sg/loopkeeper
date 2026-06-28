@@ -142,6 +142,7 @@ final class AppModel {
     func exportJSON() async -> String? { try? await api.exportData() }
 
     func stats() async -> Stats? { try? await api.stats() }
+    func engStats() async -> EngStats? { try? await api.engStats() }
 
     /// A running accomplishments doc: closed loops from the last 90 days grouped by counterpart.
     func bragDocText() async -> String {

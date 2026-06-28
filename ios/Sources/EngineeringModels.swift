@@ -192,6 +192,25 @@ struct TaskStatusResponse: Codable {
     let lastError: String?
 }
 
+/// `GET /eng/stats` — engineering throughput / velocity / cost metrics.
+struct EngStats: Codable {
+    struct Shipped: Codable { let total: Int; let last7: Int; let last30: Int }
+    struct InFlight: Codable { let total: Int }
+    struct Spend: Codable { let last7UsdCents: Int; let last30UsdCents: Int; let totalIterations: Int }
+    struct WeekBucket: Codable, Identifiable {
+        let week: String; let shipped: Int; let spendUsdCents: Int
+        var id: String { week }
+    }
+    let generatedAt: String
+    let shipped: Shipped
+    let inFlight: InFlight
+    let medianTimeToPrHours: Double?
+    let medianTimeToMergeHours: Double?
+    let medianReviewRounds: Double?
+    let spend: Spend
+    let byWeek: [WeekBucket]
+}
+
 /// Jira/repo config form (`GET`/`PUT /jira/config` — surfaced read-only in v1 from health/env).
 struct JiraSettings: Codable {
     let repo: String?

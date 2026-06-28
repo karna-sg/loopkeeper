@@ -127,8 +127,15 @@ struct TaskWorkspaceView: View {
         var bits: [String] = []
         if let r = task.repo, !r.isEmpty { bits.append(r) }
         if let b = task.branch, !b.isEmpty { bits.append(b) }
-        if let bud = task.budget, let used = bud.iterationsUsed, let max = bud.maxIterations {
-            bits.append("iter \(used)/\(max)")
+        if let bud = task.budget {
+            if let used = bud.iterationsUsed, let max = bud.maxIterations {
+                bits.append("iter \(used)/\(max)")
+            }
+            // Show cost once the agent has started work; n/a signals subscription OAuth.
+            if task.status != "not_started" {
+                let cents = bud.usdCentsUsed ?? 0
+                bits.append(cents > 0 ? String(format: "$%.2f", Double(cents) / 100.0) : "n/a")
+            }
         }
         return bits
     }
