@@ -20,6 +20,9 @@ import type { NormalizedMessage, UserIdentity } from "../../src/domain/message.t
 import type { EngTaskInput } from "../../src/domain/eng-task.ts";
 import { taskId } from "../../src/domain/eng-task.ts";
 import type { GithubPort } from "../../src/engineering/ports.ts";
+import { JiraSyncService } from "../../src/engineering/jira/jira-sync.ts";
+import type { JiraClient } from "../../src/engineering/jira/jira-client.ts";
+import type { JiraIssue } from "../../src/engineering/jira/jira-mapper.ts";
 
 const IDENTITY: UserIdentity = { displayName: "Karna", aliases: [], timezone: "Asia/Kolkata" };
 const NOW = "2026-06-25T04:00:00Z";
@@ -28,6 +31,7 @@ const noopHttp: HttpClient = { post: async () => ({ ok: true, status: 200, json:
 function makeApp(
   configOverrides: Partial<ServerConfig> = {},
   githubOverride?: GithubPort | null,
+  jiraSyncOverride?: JiraSyncService | null,
 ): { app: ReturnType<typeof buildApp>; store: LoopsStore; engStore: EngStore; push: FakePushSender } {
   const store = new LoopsStore(":memory:");
   const engStore = new EngStore(":memory:");
@@ -52,7 +56,7 @@ function makeApp(
     buildNudgeService: () => new NudgeService(store, push),
     buildDraftClient: () => new FakeDraftClient(),
     listSlackChannels: async () => [{ id: "C1", name: "general", kind: "channel" as const, isMember: true }],
-    jiraSync: null,
+    jiraSync: jiraSyncOverride ?? null,
     buildJiraSync: () => {
       throw new Error("Jira not connected");
     },
@@ -346,6 +350,24 @@ describe("engineering routes", () => {
     expect(body.task.id).toBe(id);
     expect(body.events).toEqual([]);
     expect((await app.inject({ method: "GET", url: "/tasks/nope" })).statusCode).toBe(404);
+  });
+
+  it("GET /tasks/:id overlays LIVE Jira metadata when Jira is connected (fresh-on-open)", async () => {
+    // getTask only uses its client + opts (db row is passed in), so a throwaway store is fine here.
+    const liveIssue: JiraIssue = { id: "10001", key: "LP-1", fields: { summary: "LIVE title", status: { name: "In Review" }, assignee: { accountId: "acct-1" } } };
+    const fakeClient: JiraClient = {
+      searchAssigned: async () => [],
+      getIssue: async (idOrKey) => (idOrKey === "10001" ? liveIssue : null),
+      currentUserAccountId: async () => "acct-1",
+    };
+    const jira = new JiraSyncService(fakeClient, new EngStore(":memory:"), { siteUrl: "https://x.atlassian.net", repo: "r/r", defaultBranch: "main" });
+    const { app, engStore } = makeApp({}, undefined, jira);
+    engStore.upsertFromJira([engInput({ title: "Stale cached title", jiraKey: "LK-1" })], NOW);
+
+    const body = (await app.inject({ method: "GET", url: `/tasks/${taskId("10001")}` })).json() as { task: { title: string; jiraKey: string; jiraStatus: string } };
+    expect(body.task.title).toBe("LIVE title"); // live overlay, not the cached "Stale cached title"
+    expect(body.task.jiraKey).toBe("LP-1"); // live key too
+    expect(body.task.jiraStatus).toBe("In Review");
   });
 
   it("GET /tasks/:id/status reports idle for a fresh task", async () => {

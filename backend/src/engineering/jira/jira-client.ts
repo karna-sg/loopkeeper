@@ -10,6 +10,8 @@ const FIELDS = "summary,description,status,labels,components,assignee";
 export interface JiraClient {
   /** Issues assigned to the authed user (FR-2). */
   searchAssigned(jql?: string): Promise<JiraIssue[]>;
+  /** A single issue by numeric id or key — live detail fetch. Null if the body isn't a valid issue. */
+  getIssue(idOrKey: string): Promise<JiraIssue | null>;
   /** The authed user's accountId (for the assignee gate identity). */
   currentUserAccountId(): Promise<string>;
 }
@@ -26,8 +28,22 @@ function parseIssues(body: unknown): JiraIssue[] {
   });
 }
 
+/** Validate a single-issue GET body (the /issue/{id} endpoint returns the issue directly, not wrapped). */
+function parseIssue(body: unknown): JiraIssue | null {
+  if (typeof body !== "object" || body === null) return null;
+  const o = body as Record<string, unknown>;
+  if (typeof o.id === "string" && typeof o.key === "string" && typeof o.fields === "object" && o.fields !== null) {
+    return body as JiraIssue;
+  }
+  return null;
+}
+
 function searchUrl(base: string, jql: string): string {
   return `${base}/search/jql?jql=${encodeURIComponent(jql)}&fields=${encodeURIComponent(FIELDS)}&maxResults=50`;
+}
+
+function issueUrl(base: string, idOrKey: string): string {
+  return `${base}/issue/${encodeURIComponent(idOrKey)}?fields=${encodeURIComponent(FIELDS)}`;
 }
 
 const DEFAULT_JQL = "assignee = currentUser() ORDER BY updated DESC";
@@ -50,6 +66,10 @@ export class CloudJiraClient implements JiraClient {
 
   async searchAssigned(jql = DEFAULT_JQL): Promise<JiraIssue[]> {
     return parseIssues(await this.#http.getJson(searchUrl(this.#base, jql), await this.#auth()));
+  }
+
+  async getIssue(idOrKey: string): Promise<JiraIssue | null> {
+    return parseIssue(await this.#http.getJson(issueUrl(this.#base, idOrKey), await this.#auth()));
   }
 
   async currentUserAccountId(): Promise<string> {
@@ -76,6 +96,10 @@ export class BasicJiraClient implements JiraClient {
 
   async searchAssigned(jql = DEFAULT_JQL): Promise<JiraIssue[]> {
     return parseIssues(await this.#http.getJson(searchUrl(this.#base, jql), this.#auth()));
+  }
+
+  async getIssue(idOrKey: string): Promise<JiraIssue | null> {
+    return parseIssue(await this.#http.getJson(issueUrl(this.#base, idOrKey), this.#auth()));
   }
 
   async currentUserAccountId(): Promise<string> {

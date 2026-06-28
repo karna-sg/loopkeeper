@@ -91,19 +91,39 @@ export class JiraSyncService {
         };
       }
       // Merge live Jira metadata onto the DB row so the caller sees current key/title/status.
-      return {
-        ...db,
-        jiraKey: mapped.jiraKey,
-        jiraUrl: mapped.jiraUrl,
-        title: mapped.title,
-        description: mapped.description,
-        acceptanceCriteria: mapped.acceptanceCriteria,
-        labels: mapped.labels,
-        components: mapped.components,
-        assignee: mapped.assignee,
-        jiraStatus: mapped.jiraStatus,
-      };
+      return this.#mergeLive(db, mapped);
     });
+  }
+
+  /** Overlay live Jira-owned metadata onto a DB pipeline row. Shared by listTasks + getTask so the list
+   *  and detail views can never drift. Pipeline state (stage/status/budget/artifacts/...) stays from `db`. */
+  #mergeLive(db: EngTask, mapped: ReturnType<typeof mapJiraIssue>): EngTask {
+    return {
+      ...db,
+      jiraKey: mapped.jiraKey,
+      jiraUrl: mapped.jiraUrl,
+      title: mapped.title,
+      description: mapped.description,
+      acceptanceCriteria: mapped.acceptanceCriteria,
+      labels: mapped.labels,
+      components: mapped.components,
+      assignee: mapped.assignee,
+      jiraStatus: mapped.jiraStatus,
+    };
+  }
+
+  /**
+   * Live detail for GET /tasks/:id: re-fetch THIS issue from Jira (fresh, no cache) and overlay its
+   * metadata onto the DB pipeline row. Returns the DB row unchanged if Jira can't serve the issue
+   * (deleted / unavailable) so the detail view never fails just because Jira blipped.
+   */
+  async getTask(db: EngTask): Promise<EngTask> {
+    try {
+      const issue = await this.#client.getIssue(db.jiraId);
+      return issue ? this.#mergeLive(db, mapJiraIssue(issue, this.#opts)) : db;
+    } catch {
+      return db;
+    }
   }
 
   async run(args: { nowIso: string }): Promise<JiraSyncResult> {
