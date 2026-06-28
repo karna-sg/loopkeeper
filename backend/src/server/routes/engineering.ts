@@ -89,8 +89,17 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
   // --- Reads ---
 
   app.get("/tasks", async () => {
+    const jiraSync = deps.jiraSync;
+    if (jiraSync) {
+      try {
+        const tasks = await jiraSync.listTasks();
+        return { tasks, live: true };
+      } catch {
+        // Jira temporarily unavailable — fall back to the last-synced DB snapshot.
+      }
+    }
     const filter = config.selfAccountId ? { assignee: config.selfAccountId } : {};
-    return { tasks: engStore.list(filter) };
+    return { tasks: engStore.list(filter), live: false };
   });
 
   app.get("/tasks/:id", async (req, reply) => {

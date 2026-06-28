@@ -210,12 +210,14 @@ function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngSt
       store.purgeClosedOlderThan(daysBefore(new Date().toISOString(), config.ttlDays));
     },
   });
-  // FR-2: import assigned Jira issues. Throws (and is isolated/logged) until Jira is connected.
+  // FR-2: import assigned Jira issues + reconcile stale rows. Reuses the singleton so the list
+  // cache is warmed. Throws (isolated) when Jira isn't configured yet.
   scheduler.add({
     name: "jira-sync",
     intervalMs: config.jiraSyncEveryMin * 60_000,
     run: async () => {
-      await buildProdJiraSync(config, engStore, vault, http).run({ nowIso: new Date().toISOString() });
+      if (!jiraSync) throw new Error("Jira not connected — configure LOOPKEEPER_JIRA_*");
+      await jiraSync.run({ nowIso: new Date().toISOString() });
     },
   });
   // FR-20: poll open PRs for review comments / approval. Throws (isolated) until GitHub is configured.
@@ -256,6 +258,16 @@ export function buildAppFromConfig(config: ServerConfig): { app: FastifyInstance
   const engStore = new EngStore(config.eng.dbPath);
   const vault = new EncryptedFileVault(config.vaultPath, resolveMasterKey(config.dataDir, config.masterKeyB64));
   const http: HttpClient = nodeHttp;
+
+  // Build Jira sync singleton once so the 30s list cache survives across GET /tasks requests
+  // and the scheduler reuses the same instance (warming the cache on each background sync).
+  let jiraSync: JiraSyncService | null = null;
+  try {
+    jiraSync = buildProdJiraSync(config, engStore, vault, http);
+  } catch {
+    // Jira not configured — graceful degradation (routes fall back to DB-only)
+  }
+
   const deps: AppDeps = {
     config,
     store,
@@ -267,7 +279,11 @@ export function buildAppFromConfig(config: ServerConfig): { app: FastifyInstance
     buildNudgeService: () => buildProdNudgeService(config, store),
     buildDraftClient: () => buildDraftClient(config),
     listSlackChannels: () => buildProdListChannels(vault, http),
-    buildJiraSync: () => buildProdJiraSync(config, engStore, vault, http),
+    jiraSync,
+    buildJiraSync: () => {
+      if (!jiraSync) throw new Error("Jira not connected — set JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN, or visit /auth/jira");
+      return jiraSync;
+    },
     buildGithub: () => (config.githubToken ? new RestGithubClient(config.githubToken) : null),
     now: () => new Date().toISOString(),
   };

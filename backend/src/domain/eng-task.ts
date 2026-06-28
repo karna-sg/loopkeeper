@@ -395,9 +395,9 @@ export interface AgentRun {
   logPath: string | null;
 }
 
-/** Deterministic task id derived from the Jira key — same key → same id (idempotent import). */
-export function taskId(jiraKey: string): string {
-  return `task_${createHash("sha256").update(jiraKey.toUpperCase()).digest("hex").slice(0, 20)}`;
+/** Deterministic task id derived from the immutable Jira numeric id — same issue → same id across key renames. */
+export function taskId(jiraId: string): string {
+  return `task_${createHash("sha256").update(jiraId).digest("hex").slice(0, 20)}`;
 }
 
 /** The internal composite key the state machine reasons over. Never serialized. */

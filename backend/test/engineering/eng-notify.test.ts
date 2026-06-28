@@ -7,8 +7,8 @@ import type { EngTaskInput } from "../../src/domain/eng-task.ts";
 
 const NOW = "2026-06-27T00:00:00Z";
 
-function input(jiraKey: string): EngTaskInput {
-  return { jiraKey, jiraId: "1", jiraUrl: "u", title: `Task ${jiraKey}`, description: "", acceptanceCriteria: null, labels: [], components: [], assignee: "acct-1", jiraStatus: "To Do", repo: "karna/loopkeeper", defaultBranch: "main" };
+function input(jiraKey: string, jiraId = "1"): EngTaskInput {
+  return { jiraKey, jiraId, jiraUrl: "u", title: `Task ${jiraKey}`, description: "", acceptanceCriteria: null, labels: [], components: [], assignee: "acct-1", jiraStatus: "To Do", repo: "karna/loopkeeper", defaultBranch: "main" };
 }
 
 describe("EngNotifier", () => {
@@ -20,8 +20,8 @@ describe("EngNotifier", () => {
   });
 
   it("pushes once per needs-human status, deep-linking by taskId", async () => {
-    store.upsertFromJira([input("LK-1")], NOW);
-    const id = taskId("LK-1");
+    store.upsertFromJira([input("LK-1", "10001")], NOW);
+    const id = taskId("10001");
     store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
     store.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
 
@@ -51,7 +51,7 @@ describe("EngNotifier", () => {
   });
 
   it("does not push for non-needs-human tasks", async () => {
-    store.upsertFromJira([input("LK-9")], NOW); // plan:not_started
+    store.upsertFromJira([input("LK-9", "10009")], NOW); // plan:not_started
     const notifier = new EngNotifier(store, push, () => ["devtok"]);
     expect((await notifier.run()).sent).toBe(0);
   });

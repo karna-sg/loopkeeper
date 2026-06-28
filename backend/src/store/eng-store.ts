@@ -71,6 +71,7 @@ interface TaskRow {
   budget: string;
   last_notified_status: string | null;
   last_error: string | null;
+  cancel_pending: number;
   created_ts: string;
   updated_ts: string;
 }
@@ -244,7 +245,7 @@ export class EngStore {
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS eng_tasks (
         id TEXT PRIMARY KEY,
-        jira_key TEXT NOT NULL UNIQUE,
+        jira_key TEXT NOT NULL,
         jira_id TEXT NOT NULL DEFAULT '',
         jira_url TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL,
@@ -266,8 +267,10 @@ export class EngStore {
         budget TEXT NOT NULL DEFAULT '{}',
         last_notified_status TEXT,
         last_error TEXT,
+        cancel_pending INTEGER NOT NULL DEFAULT 0,
         created_ts TEXT NOT NULL,
-        updated_ts TEXT NOT NULL
+        updated_ts TEXT NOT NULL,
+        UNIQUE(jira_id)
       );
       CREATE INDEX IF NOT EXISTS idx_eng_tasks_stage ON eng_tasks(stage, status);
       CREATE INDEX IF NOT EXISTS idx_eng_tasks_assignee ON eng_tasks(assignee);
@@ -327,7 +330,7 @@ export class EngStore {
       );
       CREATE INDEX IF NOT EXISTS idx_eng_runs_task ON eng_agent_runs(task_id, started_ts);
     `);
-    // Post-deploy column additions go here (try/catch ALTER), same no-migration convention as LoopsStore.
+    // Post-deploy column additions — idempotent (columns already present in new CREATE TABLE above).
     for (const ddl of [
       "ALTER TABLE eng_tasks ADD COLUMN cancel_pending INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE eng_tasks ADD COLUMN claude_model TEXT",
@@ -335,9 +338,114 @@ export class EngStore {
       try {
         this.#db.exec(ddl);
       } catch {
-        // column already present
+        // column already present — expected for existing databases
       }
     }
+    this.#migrateJiraIdIdentity();
+  }
+
+  /**
+   * One-time migration for databases that used jira_key as the UNIQUE conflict key.
+   * After this runs, jira_id is the stable identity and jira_key is display-only.
+   */
+  #migrateJiraIdIdentity(): void {
+    // Detect old schema: the autoindex on eng_tasks covers jira_key (not jira_id).
+    // In new schema the UNIQUE(jira_id) constraint creates sqlite_autoindex_eng_tasks_1.
+    // We read pragma_index_info to see which column index 1 covers.
+    const idxInfo = this.#db.prepare("SELECT name FROM pragma_index_info('sqlite_autoindex_eng_tasks_1') LIMIT 1").get() as
+      | { name: string }
+      | undefined;
+    if (idxInfo?.name !== "jira_key") return; // already on new schema (or fresh DB with no autoindex yet)
+
+    this.#db.transaction(() => {
+      // 1. Rows with jira_id='' can't be backfilled without a live Jira call.
+      //    not_started ones: delete (no pipeline work lost; next sync re-imports).
+      //    in-flight ones: keep with a sentinel jira_id so reconcile can flag them later.
+      this.#db.exec(`
+        UPDATE eng_tasks SET jira_id = 'UNKNOWN_' || jira_key
+          WHERE jira_id = '' AND NOT (stage = 'plan' AND status = 'not_started');
+        DELETE FROM eng_tasks WHERE jira_id = '';
+      `);
+
+      // 2. Dedup by jira_id: keep oldest row (lowest rowid), delete the rest.
+      this.#db.exec(`
+        DELETE FROM eng_tasks WHERE rowid NOT IN (
+          SELECT MIN(rowid) FROM eng_tasks GROUP BY jira_id
+        );
+      `);
+      // Cascade-delete orphaned rows from the discarded duplicates.
+      this.#db.exec(`
+        DELETE FROM eng_events WHERE task_id NOT IN (SELECT id FROM eng_tasks);
+        DELETE FROM eng_jobs WHERE task_id NOT IN (SELECT id FROM eng_tasks);
+        DELETE FROM eng_agent_runs WHERE task_id NOT IN (SELECT id FROM eng_tasks);
+      `);
+
+      // 3. Re-derive id = taskId(jira_id); update eng_events, eng_jobs, eng_agent_runs to match.
+      const rows = this.#db.prepare("SELECT id, jira_id FROM eng_tasks").all() as { id: string; jira_id: string }[];
+      const stmts = {
+        task: this.#db.prepare("UPDATE eng_tasks SET id = ? WHERE id = ?"),
+        events: this.#db.prepare("UPDATE eng_events SET task_id = ? WHERE task_id = ?"),
+        jobs: this.#db.prepare("UPDATE eng_jobs SET task_id = ? WHERE task_id = ?"),
+        runs: this.#db.prepare("UPDATE eng_agent_runs SET task_id = ? WHERE task_id = ?"),
+      };
+      for (const row of rows) {
+        const newId = taskId(row.jira_id);
+        if (newId === row.id) continue;
+        stmts.events.run(newId, row.id);
+        stmts.jobs.run(newId, row.id);
+        stmts.runs.run(newId, row.id);
+        stmts.task.run(newId, row.id); // PRIMARY KEY update last
+      }
+
+      // 4. Rebuild the table without UNIQUE(jira_key), with UNIQUE(jira_id).
+      //    SQLite cannot DROP CONSTRAINT, so we use the rename+recreate dance.
+      this.#db.exec(`
+        ALTER TABLE eng_tasks RENAME TO eng_tasks_legacy;
+        CREATE TABLE eng_tasks (
+          id TEXT PRIMARY KEY,
+          jira_key TEXT NOT NULL,
+          jira_id TEXT NOT NULL DEFAULT '',
+          jira_url TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          acceptance_criteria TEXT,
+          labels TEXT NOT NULL DEFAULT '[]',
+          components TEXT NOT NULL DEFAULT '[]',
+          assignee TEXT NOT NULL DEFAULT '',
+          jira_status TEXT NOT NULL DEFAULT '',
+          repo TEXT NOT NULL DEFAULT '',
+          default_branch TEXT NOT NULL DEFAULT 'main',
+          branch TEXT,
+          worktree_path TEXT,
+          claude_session_id TEXT,
+          claude_model TEXT,
+          stage TEXT NOT NULL DEFAULT 'plan',
+          status TEXT NOT NULL DEFAULT 'not_started',
+          artifacts TEXT NOT NULL DEFAULT '{}',
+          budget TEXT NOT NULL DEFAULT '{}',
+          last_notified_status TEXT,
+          last_error TEXT,
+          cancel_pending INTEGER NOT NULL DEFAULT 0,
+          created_ts TEXT NOT NULL,
+          updated_ts TEXT NOT NULL,
+          UNIQUE(jira_id)
+        );
+        INSERT INTO eng_tasks (id, jira_key, jira_id, jira_url, title, description,
+          acceptance_criteria, labels, components, assignee, jira_status, repo,
+          default_branch, branch, worktree_path, claude_session_id, claude_model,
+          stage, status, artifacts, budget, last_notified_status, last_error,
+          cancel_pending, created_ts, updated_ts)
+        SELECT id, jira_key, jira_id, jira_url, title, description,
+          acceptance_criteria, labels, components, assignee, jira_status, repo,
+          default_branch, branch, worktree_path, claude_session_id, claude_model,
+          stage, status, artifacts, budget, last_notified_status, last_error,
+          COALESCE(cancel_pending, 0), created_ts, updated_ts
+        FROM eng_tasks_legacy;
+        DROP TABLE eng_tasks_legacy;
+        CREATE INDEX IF NOT EXISTS idx_eng_tasks_stage ON eng_tasks(stage, status);
+        CREATE INDEX IF NOT EXISTS idx_eng_tasks_assignee ON eng_tasks(assignee);
+      `);
+    })();
   }
 
   // --- Tasks ---
@@ -355,8 +463,8 @@ export class EngStore {
       VALUES
         (@id, @jira_key, @jira_id, @jira_url, @title, @description, @acceptance_criteria, @labels, @components,
          @assignee, @jira_status, @repo, @default_branch, 'plan', 'not_started', '{}', @budget, @now, @now)
-      ON CONFLICT(jira_key) DO UPDATE SET
-        jira_id = excluded.jira_id,
+      ON CONFLICT(jira_id) DO UPDATE SET
+        jira_key = excluded.jira_key,
         jira_url = excluded.jira_url,
         title = excluded.title,
         description = excluded.description,
@@ -371,7 +479,7 @@ export class EngStore {
     const tx = this.#db.transaction((rows: readonly EngTaskInput[]) => {
       for (const t of rows) {
         insert.run({
-          id: taskId(t.jiraKey),
+          id: taskId(t.jiraId),
           jira_key: t.jiraKey,
           jira_id: t.jiraId,
           jira_url: t.jiraUrl,
@@ -426,6 +534,62 @@ export class EngStore {
 
   count(): number {
     return (this.#db.prepare("SELECT COUNT(*) AS n FROM eng_tasks").get() as { n: number }).n;
+  }
+
+  /**
+   * Reconcile eng.db against the live Jira assignee set. Called after every sync.
+   * - plan:not_started rows not in liveJiraIds are pruned (no pipeline work was started).
+   * - In-flight rows (past not_started) are flagged via lastError rather than deleted.
+   * - Terminal rows (deployed/verified/rolled_back/cancelled) are silently skipped.
+   */
+  reconcile(liveJiraIds: ReadonlySet<string>, nowIso: string): { pruned: number; flagged: number } {
+    const rows = this.#db.prepare("SELECT id, jira_id, stage, status FROM eng_tasks").all() as {
+      id: string;
+      jira_id: string;
+      stage: string;
+      status: string;
+    }[];
+
+    const stale = rows.filter((r) => !liveJiraIds.has(r.jira_id));
+    if (stale.length === 0) return { pruned: 0, flagged: 0 };
+
+    const deleteTask = this.#db.prepare("DELETE FROM eng_tasks WHERE id = ?");
+    const deleteEvents = this.#db.prepare("DELETE FROM eng_events WHERE task_id = ?");
+    const deleteJobs = this.#db.prepare("DELETE FROM eng_jobs WHERE task_id = ?");
+    const deleteRuns = this.#db.prepare("DELETE FROM eng_agent_runs WHERE task_id = ?");
+    const flagTask = this.#db.prepare("UPDATE eng_tasks SET last_error = ?, updated_ts = ? WHERE id = ?");
+
+    let pruned = 0;
+    let flagged = 0;
+
+    const tx = this.#db.transaction(() => {
+      for (const row of stale) {
+        // Terminal tasks: silently skip — completed work is worth keeping for audit.
+        if (
+          row.status === "cancelled" ||
+          (row.stage === "deploy" && row.status === "deployed") ||
+          (row.stage === "verify" && row.status === "verified") ||
+          (row.stage === "rollback" && row.status === "rolled_back")
+        ) {
+          continue;
+        }
+
+        if (row.stage === "plan" && row.status === "not_started") {
+          // Safe to prune: no meaningful pipeline work has been done.
+          deleteEvents.run(row.id);
+          deleteJobs.run(row.id);
+          deleteRuns.run(row.id);
+          deleteTask.run(row.id);
+          pruned++;
+        } else {
+          // In-flight: keep the row but surface a warning so the operator can investigate.
+          flagTask.run("Task no longer assigned in Jira — pipeline may be stale", nowIso, row.id);
+          flagged++;
+        }
+      }
+    });
+    tx();
+    return { pruned, flagged };
   }
 
   #currentStageStatus(id: string): StageStatus | null {

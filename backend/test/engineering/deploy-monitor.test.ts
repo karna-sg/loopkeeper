@@ -18,7 +18,7 @@ function input(): EngTaskInput {
 /** Walk a task to deploy:deploying with a recorded merge sha + deploy artifact (mirrors the real flow). */
 function seedDeploying(engStore: EngStore, sha: string, startedTs = NOW): string {
   engStore.upsertFromJira([input()], NOW);
-  const id = taskId("LK-1");
+  const id = taskId("10001");
   const path: Array<[string, string, "user" | "system", boolean]> = [
     ["plan", "in_progress", "user", false], ["plan", "completed_unapproved", "system", false], ["plan", "approved", "user", true],
     ["dev", "in_progress", "system", false], ["dev", "done", "system", false],

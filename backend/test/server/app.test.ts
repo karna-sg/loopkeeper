@@ -52,6 +52,7 @@ function makeApp(
     buildNudgeService: () => new NudgeService(store, push),
     buildDraftClient: () => new FakeDraftClient(),
     listSlackChannels: async () => [{ id: "C1", name: "general", kind: "channel" as const, isMember: true }],
+    jiraSync: null,
     buildJiraSync: () => {
       throw new Error("Jira not connected");
     },
@@ -340,7 +341,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id returns task + events; 404 for unknown", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const body = (await app.inject({ method: "GET", url: `/tasks/${id}` })).json() as { task: { id: string }; events: unknown[] };
     expect(body.task.id).toBe(id);
     expect(body.events).toEqual([]);
@@ -350,7 +351,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/status reports idle for a fresh task", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const status = (await app.inject({ method: "GET", url: `/tasks/${taskId("LK-1")}/status` })).json() as { runState: string; stage: string };
+    const status = (await app.inject({ method: "GET", url: `/tasks/${taskId("10001")}/status` })).json() as { runState: string; stage: string };
     expect(status).toMatchObject({ stage: "plan", runState: "idle" });
   });
 
@@ -362,13 +363,13 @@ describe("engineering routes", () => {
   it("gates fail closed without a self identity (403)", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    expect((await app.inject({ method: "POST", url: `/tasks/${taskId("LK-1")}/prepare-plan` })).statusCode).toBe(403);
+    expect((await app.inject({ method: "POST", url: `/tasks/${taskId("10001")}/prepare-plan` })).statusCode).toBe(403);
   });
 
   it("prepare-plan transitions to in_progress and enqueues a plan job", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const res = await app.inject({ method: "POST", url: `/tasks/${id}/prepare-plan` });
     expect(res.json()).toEqual({ started: true });
     expect(engStore.get(id)).toMatchObject({ stage: "plan", status: "in_progress" });
@@ -378,7 +379,7 @@ describe("engineering routes", () => {
   it("plan/approve enforces the gate and enqueues dev_test", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Not yet planned → 409.
     expect((await app.inject({ method: "POST", url: `/tasks/${id}/plan/approve` })).statusCode).toBe(409);
     engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
@@ -393,7 +394,7 @@ describe("engineering routes", () => {
   it("review/approve lets the solo operator approve the PR and advances to merge:ready", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Wrong stage → 409.
     expect((await app.inject({ method: "POST", url: `/tasks/${id}/review/approve` })).statusCode).toBe(409);
     const path: Array<[string, string, "user" | "agent" | "system", boolean]> = [
@@ -421,7 +422,7 @@ describe("engineering routes", () => {
   it("merge/approve crosses Gate 3 and enqueues a merge job with the method", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const path: Array<[string, string, "user" | "agent" | "system", boolean]> = [
       ["plan", "in_progress", "user", false],
       ["plan", "completed_unapproved", "agent", false],
@@ -451,7 +452,7 @@ describe("engineering routes", () => {
   it("POST /tasks/:id/cancel 403s without self identity", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     expect((await app.inject({ method: "POST", url: `/tasks/${id}/cancel` })).statusCode).toBe(403);
   });
 
@@ -463,7 +464,7 @@ describe("engineering routes", () => {
   it("POST /tasks/:id/cancel moves an active task to blocked and cancels jobs", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Advance to a running state and enqueue a job.
     engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
     engStore.enqueue({ taskId: id, kind: "plan", dedupeKey: `${id}:plan` }, NOW);
@@ -482,7 +483,7 @@ describe("engineering routes", () => {
   it("POST /tasks/:id/cancel 409s for a terminal task", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Drive to cancelled (terminal).
     engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
     engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
@@ -492,7 +493,7 @@ describe("engineering routes", () => {
   it("retry after cancel resets cancel_pending and resumes from blocked", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Put into blocked via cancel.
     engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
     await app.inject({ method: "POST", url: `/tasks/${id}/cancel` });
@@ -526,7 +527,7 @@ describe("engineering routes", () => {
   it("verify/confirm crosses Gate 4 to verify:verified", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     expect((await app.inject({ method: "POST", url: `/tasks/${id}/verify/confirm` })).statusCode).toBe(409);
     driveTo(engStore, id, ["verify", "awaiting_review"]);
     expect((await app.inject({ method: "POST", url: `/tasks/${id}/verify/confirm` })).json()).toEqual({ ok: true });
@@ -537,7 +538,7 @@ describe("engineering routes", () => {
   it("rollback arms + executes (Gate 5) and enqueues a rollback job", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     driveTo(engStore, id, ["verify", "awaiting_review"]);
     const res = await app.inject({ method: "POST", url: `/tasks/${id}/rollback` });
     expect(res.json()).toEqual({ started: true });
@@ -557,7 +558,7 @@ describe("engineering routes", () => {
   it("fix-build sends a ci_build deploy failure back to dev (seedFix job)", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     driveToDeployFailed(engStore, id, "ci_build");
     const res = await app.inject({ method: "POST", url: `/tasks/${id}/fix-build` });
     expect(res.json()).toEqual({ started: true });
@@ -570,7 +571,7 @@ describe("engineering routes", () => {
   it("retry on a ci_build deploy failure is rejected with a fix-build hint", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     driveToDeployFailed(engStore, id, "ci_build");
     const res = await app.inject({ method: "POST", url: `/tasks/${id}/retry` });
     expect(res.statusCode).toBe(409);
@@ -580,7 +581,7 @@ describe("engineering routes", () => {
   it("fix-build is 409 on a cd_infra failure (only ci_build is fixable)", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     driveToDeployFailed(engStore, id, "cd_infra");
     expect((await app.inject({ method: "POST", url: `/tasks/${id}/fix-build` })).statusCode).toBe(409);
   });
@@ -588,7 +589,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/diff returns 503 when GitHub is not configured", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const res = await app.inject({ method: "GET", url: `/tasks/${id}/diff` });
     expect(res.statusCode).toBe(503);
   });
@@ -621,7 +622,7 @@ describe("engineering routes", () => {
     };
     const { app, engStore } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const res = (await app.inject({ method: "GET", url: `/tasks/${id}/diff` })).json() as { files: unknown[]; truncated: boolean };
     expect(res.files).toEqual([]);
     expect(res.truncated).toBe(false);
@@ -653,7 +654,7 @@ describe("engineering routes", () => {
     };
     const { app, engStore } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Drive to dev:done so the task has a branch set.
     engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
     engStore.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
@@ -676,7 +677,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/activity returns done:true and empty lines when no agent runs exist", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity` })).json() as { lines: string[]; nextOffset: number; done: boolean };
     expect(body).toEqual({ lines: [], nextOffset: 0, done: true });
   });
@@ -684,7 +685,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/activity returns done:true when run has no logPath", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Insert a running run with no logPath (simulates a run that never opened a log file).
     engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sess-1", iteration: 1, startedTs: NOW });
     const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity` })).json() as { lines: string[]; nextOffset: number; done: boolean };
@@ -694,7 +695,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/activity reads and formats JSONL from log file", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     const logDir = mkdtempSync(join(tmpdir(), "lk-test-"));
     const taskLogDir = join(logDir, id);
@@ -724,7 +725,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/activity respects the offset cursor (returns only new lines)", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     const logDir = mkdtempSync(join(tmpdir(), "lk-test-"));
     const taskLogDir = join(logDir, id);
@@ -748,7 +749,7 @@ describe("engineering routes", () => {
   it("GET /tasks/:id/activity: offset at EOF returns empty lines, done:true for terminal run", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     const logDir = mkdtempSync(join(tmpdir(), "lk-test-"));
     const taskLogDir = join(logDir, id);
@@ -772,7 +773,7 @@ describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
   it("sets claudeModel and reflects it in GET /tasks/:id", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     const res = await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: "claude-opus-4-8" } });
     expect(res.statusCode).toBe(200);
@@ -783,7 +784,7 @@ describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
   it("resets claudeModel to null (global default)", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     engStore.setModel(id, "claude-opus-4-8", NOW);
 
     const res = await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: null } });
@@ -794,7 +795,7 @@ describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
   it("rejects unknown model strings with 400", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     const res = await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: "gpt-4o" } });
     expect(res.statusCode).toBe(400);
@@ -804,7 +805,7 @@ describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
   it("returns 403 without a self identity", async () => {
     const { app, engStore } = makeApp(); // no selfAccountId
     engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     expect((await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: "claude-opus-4-8" } })).statusCode).toBe(403);
   });
 
