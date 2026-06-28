@@ -218,6 +218,67 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     return { started: true };
   });
 
+  // --- Gate 4: post-deploy verify sign-off ---
+
+  app.post("/tasks/:id/verify/confirm", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    if (!(task.stage === "verify" && task.status === "awaiting_review")) {
+      return reply.code(409).send({ error: "task is not awaiting verification" });
+    }
+    const now = deps.now();
+    if (task.artifacts.verify) engStore.setArtifact(id, { verify: { ...task.artifacts.verify, verifiedBy: config.selfAccountId, verifiedTs: now } }, now);
+    const r = applyTransition(engStore, { taskId: id, to: { stage: "verify", status: "verified" }, actor: "user", gateApproved: true, ...detail(), ts: now }, now);
+    if (!r.ok) return reply.code(409).send({ error: r.reason ?? "cannot confirm verification" });
+    return { ok: true };
+  });
+
+  // Re-run the post-deploy smoke after a verify failure (the verify job advances failed → in_progress).
+  app.post("/tasks/:id/verify/retry", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    if (!(task.stage === "verify" && task.status === "failed")) {
+      return reply.code(409).send({ error: "no failed verification to retry" });
+    }
+    const now = deps.now();
+    const enqueued = engStore.enqueue({ taskId: id, kind: "verify", dedupeKey: `${id}:verify` }, now);
+    if (!enqueued) return reply.code(409).send({ error: "verification already running" });
+    return { started: true };
+  });
+
+  // --- Gate 5: rollback (revert the merge + redeploy the previous good state) ---
+
+  app.post("/tasks/:id/rollback", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    const canRollback = (task.stage === "verify" && (task.status === "awaiting_review" || task.status === "failed")) || (task.stage === "deploy" && task.status === "failed");
+    if (!canRollback) return reply.code(409).send({ error: "task is not in a rollback-able state" });
+    if (!task.artifacts.merge?.commitSha) return reply.code(409).send({ error: "no merge commit to roll back" });
+    if (!config.github) return reply.code(503).send({ error: "GitHub not configured" });
+    const now = deps.now();
+    engStore.setArtifact(
+      id,
+      { rollback: { targetSha: task.artifacts.merge.commitSha, revertSha: null, prUrl: null, status: "ready", startedTs: now, finishedTs: null, triggeredBy: config.selfAccountId, logTail: null } },
+      now,
+    );
+    // Arm → execute (the store enforces user + gateApproved on the execution gate), then enqueue.
+    const armed = engStore.transition({ taskId: id, to: { stage: "rollback", status: "ready" }, actor: "user", ...detail(), ts: now });
+    if (!armed.ok) return reply.code(409).send({ error: armed.reason ?? "cannot start rollback" });
+    const exec = engStore.transition({ taskId: id, to: { stage: "rollback", status: "in_progress" }, actor: "user", gateApproved: true, ...detail(), ts: now });
+    if (!exec.ok) return reply.code(409).send({ error: exec.reason ?? "cannot roll back" });
+    engStore.enqueue({ taskId: id, kind: "rollback", dedupeKey: `${id}:rollback` }, now);
+    return { started: true };
+  });
+
   // --- Retry: raise budget + resume, or re-run a failed deploy (decision #6) ---
 
   app.post("/tasks/:id/retry", async (req, reply) => {

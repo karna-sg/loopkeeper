@@ -40,8 +40,16 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
   "merge:merging": ["merge:merged"],
   "merge:merged": ["deploy:deploying"],
   "deploy:deploying": ["deploy:deployed", "deploy:failed"],
-  "deploy:failed": ["deploy:deploying" /* retry; route also asserts a recorded merge gate */],
-  "deploy:deployed": [],
+  "deploy:failed": ["deploy:deploying" /* retry; route also asserts a recorded merge gate */, "rollback:ready" /* undo a bad deploy */],
+  "deploy:deployed": ["verify:in_progress" /* post-deploy smoke + sign-off */],
+  "verify:in_progress": ["verify:awaiting_review", "verify:failed"],
+  "verify:awaiting_review": ["verify:verified" /* GATE 4 */, "rollback:ready"],
+  "verify:failed": ["verify:in_progress" /* retry smoke */, "rollback:ready"],
+  "verify:verified": [] /* success terminal */,
+  "rollback:ready": ["rollback:in_progress" /* GATE 5 */],
+  "rollback:in_progress": ["rollback:rolled_back", "rollback:failed"],
+  "rollback:failed": ["rollback:in_progress" /* retry */, "rollback:ready"],
+  "rollback:rolled_back": [] /* recovered terminal */,
 };
 
 /** The exact gated transitions (composite `from → to`). Crossing these requires a human tap. */
@@ -49,6 +57,8 @@ export const GATED_TRANSITIONS: ReadonlySet<string> = new Set([
   "plan:completed_unapproved -> plan:approved",
   "pr:proposed -> pr:creating",
   "merge:ready -> merge:merging",
+  "verify:awaiting_review -> verify:verified", // GATE 4: human confirms the deployed change is good
+  "rollback:ready -> rollback:in_progress", // GATE 5: human confirms the rollback (revert + redeploy)
 ]);
 
 /** Statuses that mean "this task is waiting on a person" (drives Home badge + FR-25 push). */
@@ -58,6 +68,10 @@ const NEEDS_HUMAN_KEYS: ReadonlySet<string> = new Set([
   "review:comments_received",
   "merge:ready",
   "deploy:failed",
+  "verify:awaiting_review",
+  "verify:failed",
+  "rollback:ready",
+  "rollback:failed",
 ]);
 
 export interface TransitionResult {
@@ -65,9 +79,13 @@ export interface TransitionResult {
   reason?: string;
 }
 
-/** A terminal position — no further automated progress (cancelled, or successfully deployed). */
+/** A terminal position — no further automated progress (cancelled, verified, or rolled back). */
 export function isTerminal(s: StageStatus): boolean {
-  return s.status === "cancelled" || (s.stage === "deploy" && s.status === "deployed");
+  return (
+    s.status === "cancelled" ||
+    (s.stage === "verify" && s.status === "verified") ||
+    (s.stage === "rollback" && s.status === "rolled_back")
+  );
 }
 
 /** Whether crossing `from → to` consumes a human approval gate. */
@@ -140,6 +158,12 @@ export const NOTIFY_REASONS = [
   "deployed",
   "deploy_failed",
   "blocked",
+  "verify_ready",
+  "verified",
+  "verify_failed",
+  "rollback_ready",
+  "rolled_back",
+  "rollback_failed",
 ] as const;
 export type NotifyReason = (typeof NOTIFY_REASONS)[number];
 
@@ -158,8 +182,16 @@ const EFFECTS_BY_TARGET: Readonly<Record<string, readonly TransitionEffect[]>> =
   "merge:ready": [{ kind: "notify", reason: "merge_ready" }],
   "merge:merging": [{ kind: "enqueue_job", job: "merge" }],
   "merge:merged": [{ kind: "enqueue_job", job: "deploy" }],
-  "deploy:deployed": [{ kind: "notify", reason: "deployed" }],
+  // Deploy succeeded → kick the post-deploy verify (smoke + change summary); the verify job advances the stage.
+  "deploy:deployed": [{ kind: "enqueue_job", job: "verify" }],
   "deploy:failed": [{ kind: "notify", reason: "deploy_failed" }],
+  "verify:awaiting_review": [{ kind: "notify", reason: "verify_ready" }],
+  "verify:verified": [{ kind: "notify", reason: "verified" }],
+  "verify:failed": [{ kind: "notify", reason: "verify_failed" }],
+  "rollback:ready": [{ kind: "notify", reason: "rollback_ready" }],
+  "rollback:in_progress": [{ kind: "enqueue_job", job: "rollback" }],
+  "rollback:rolled_back": [{ kind: "notify", reason: "rolled_back" }],
+  "rollback:failed": [{ kind: "notify", reason: "rollback_failed" }],
 };
 
 /** What the orchestrator should DO when a task arrives at `to` (enqueue work / notify). */

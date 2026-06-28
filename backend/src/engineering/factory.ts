@@ -59,6 +59,7 @@ export function buildOrchestrator(config: ServerConfig, engStore: EngStore, canc
     deployEnabled: config.deploy?.enabled ?? false,
     deployMode: config.deploy?.mode ?? "github-actions",
     deployEnv: "prod",
+    verifyUrl: config.deployVerifyUrl,
     now: () => new Date().toISOString(),
     cancelRegistry,
   });

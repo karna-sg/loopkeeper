@@ -15,15 +15,17 @@ extension Theme {
         case "review": "Review"
         case "merge": "Merge"
         case "deploy": "Deploy"
+        case "verify": "Verify"
+        case "rollback": "Rollback"
         default: stage.capitalized
         }
     }
 
-    /// Lowercase, fixed-width stage key for monospaced lists/trees: `plan  `, `deploy`.
-    /// Pad to the width of the widest key ("deploy"/"review" = 6) so columns line up.
+    /// Lowercase, fixed-width stage key for monospaced lists/trees: `plan    `, `rollback`.
+    /// Pad to the width of the widest key ("rollback" = 8) so columns line up.
     static func stageKey(_ stage: String) -> String {
         let key = (stage == "pr") ? "pr" : stage.lowercased()
-        return key.padding(toLength: 6, withPad: " ", startingAt: 0)
+        return key.padding(toLength: 8, withPad: " ", startingAt: 0)
     }
 
     static func stageIcon(_ stage: String) -> String {
@@ -35,6 +37,8 @@ extension Theme {
         case "review": "bubble.left.and.bubble.right"
         case "merge": "arrow.triangle.merge"
         case "deploy": "shippingbox"
+        case "verify": "checkmark.seal"
+        case "rollback": "arrow.uturn.backward"
         default: "circle"
         }
     }
@@ -48,18 +52,26 @@ extension Theme {
         case "approved": return "Approved"
         case "done": return "Done"
         case "passed": return "Passed"
-        case "failed": return stage == "deploy" ? "Deploy failed" : "Tests failed"
+        case "failed":
+            switch stage {
+            case "deploy": return "Deploy failed"
+            case "verify": return "Verification failed"
+            case "rollback": return "Rollback failed"
+            default: return "Tests failed"
+            }
         case "proposed": return "Proposed"
         case "creating": return "Opening…"
         case "created": return "Created"
-        case "awaiting_review": return "Awaiting review"
+        case "awaiting_review": return stage == "verify" ? "Deployed — confirm" : "Awaiting review"
         case "comments_received": return "Comments received"
         case "comments_addressed": return "Comments addressed"
-        case "ready": return "Ready to merge"
+        case "ready": return stage == "rollback" ? "Ready to roll back" : "Ready to merge"
         case "merging": return "Merging…"
         case "merged": return "Merged"
         case "deploying": return "Deploying…"
         case "deployed": return "Deployed"
+        case "verified": return "Verified"
+        case "rolled_back": return "Rolled back"
         case "blocked": return "Needs attention"
         case "cancelled": return "Cancelled"
         default: return status.capitalized
@@ -70,23 +82,36 @@ extension Theme {
     static func statusToken(_ stage: String, _ status: String) -> String {
         switch status {
         case "not_started": return "queued"
-        case "in_progress": return "running"
+        case "in_progress":
+            switch stage {
+            case "verify": return "verifying"
+            case "rollback": return "reverting"
+            default: return "running"
+            }
         case "completed_unapproved": return "awaiting"
         case "approved": return "approved"
         case "done": return "done"
         case "passed": return "passed"
-        case "failed": return stage == "deploy" ? "deploy fail" : "failed"
+        case "failed":
+            switch stage {
+            case "deploy": return "deploy fail"
+            case "verify": return "verify fail"
+            case "rollback": return "rollback fail"
+            default: return "failed"
+            }
         case "proposed": return "awaiting"
         case "creating": return "opening"
         case "created": return "created"
-        case "awaiting_review": return "in review"
+        case "awaiting_review": return stage == "verify" ? "confirm" : "in review"
         case "comments_received": return "comments"
         case "comments_addressed": return "addressed"
-        case "ready": return "awaiting"
+        case "ready": return stage == "rollback" ? "armed" : "awaiting"
         case "merging": return "merging"
         case "merged": return "merged"
         case "deploying": return "deploying"
         case "deployed": return "deployed"
+        case "verified": return "verified"
+        case "rolled_back": return "rolled back"
         case "blocked": return "blocked"
         case "cancelled": return "cancelled"
         default: return status.lowercased()

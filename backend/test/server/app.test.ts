@@ -495,4 +495,46 @@ describe("engineering routes", () => {
     expect(engStore.isTaskCancelPending(id)).toBe(false);
     expect(engStore.get(id)).toMatchObject({ stage: "plan", status: "in_progress" });
   });
+
+  // Drive a task to a given (stage,status) for the post-deploy route tests.
+  const FULL_PATH: Array<[string, string, "user" | "agent" | "system", boolean]> = [
+    ["plan", "in_progress", "user", false], ["plan", "completed_unapproved", "agent", false], ["plan", "approved", "user", true],
+    ["dev", "in_progress", "system", false], ["dev", "done", "agent", false],
+    ["test", "in_progress", "system", false], ["test", "passed", "system", false],
+    ["pr", "proposed", "system", false], ["pr", "creating", "user", true], ["pr", "created", "system", false],
+    ["review", "awaiting_review", "system", false], ["review", "approved", "system", false],
+    ["merge", "ready", "system", false], ["merge", "merging", "user", true], ["merge", "merged", "system", false],
+    ["deploy", "deploying", "system", false], ["deploy", "deployed", "system", false], ["verify", "in_progress", "system", false],
+    ["verify", "awaiting_review", "system", false],
+  ];
+  function driveTo(engStore: EngStore, id: string, until: [string, string]): void {
+    engStore.setArtifact(id, { merge: { commitSha: "mergesha", mergedTs: NOW, mergedBy: null, method: "squash" } }, NOW);
+    for (const [stage, status, actor, gate] of FULL_PATH) {
+      engStore.transition({ taskId: id, to: { stage: stage as never, status: status as never }, actor, gateApproved: gate, ts: NOW });
+      if (stage === until[0] && status === until[1]) return;
+    }
+  }
+
+  it("verify/confirm crosses Gate 4 to verify:verified", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/verify/confirm` })).statusCode).toBe(409);
+    driveTo(engStore, id, ["verify", "awaiting_review"]);
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/verify/confirm` })).json()).toEqual({ ok: true });
+    expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "verified" });
+    expect(engStore.events(id).find((e) => e.toStage === "verify" && e.toStatus === "verified")).toMatchObject({ gateApproved: true, actor: "user" });
+  });
+
+  it("rollback arms + executes (Gate 5) and enqueues a rollback job", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    driveTo(engStore, id, ["verify", "awaiting_review"]);
+    const res = await app.inject({ method: "POST", url: `/tasks/${id}/rollback` });
+    expect(res.json()).toEqual({ started: true });
+    expect(engStore.get(id)).toMatchObject({ stage: "rollback", status: "in_progress" });
+    expect(engStore.runningJobForTask(id)?.kind).toBe("rollback");
+    expect(engStore.events(id).find((e) => e.toStage === "rollback" && e.toStatus === "in_progress")).toMatchObject({ gateApproved: true, actor: "user" });
+  });
 });

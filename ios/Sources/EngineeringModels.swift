@@ -3,7 +3,7 @@ import Foundation
 /// Mirrors the backend `EngTask` JSON (camelCase 1:1). `stage`/`status` are kept as `String` so an
 /// unknown value from a newer backend never crashes the decoder; sub-artifacts are all optional.
 
-let engStages = ["plan", "dev", "test", "pr", "review", "merge", "deploy"]
+let engStages = ["plan", "dev", "test", "pr", "review", "merge", "deploy", "verify"]
 
 struct PlanArtifact: Codable, Hashable {
     let text: String?
@@ -76,6 +76,31 @@ struct DeployArtifact: Codable, Hashable {
     let cd: String?
 }
 
+struct VerifyCheck: Codable, Hashable {
+    let name: String?
+    let ok: Bool?
+    let detail: String?
+}
+
+struct VerifyArtifact: Codable, Hashable {
+    let deployedSha: String?
+    let changeSummary: String?
+    let healthOk: Bool?
+    let checks: [VerifyCheck]?
+    let output: String?
+    let runUrl: String?
+    let verifiedBy: String?
+    let verifiedTs: String?
+}
+
+struct RollbackArtifact: Codable, Hashable {
+    let targetSha: String?
+    let revertSha: String?
+    let prUrl: String?
+    let status: String?
+    let logTail: String?
+}
+
 struct TaskArtifacts: Codable, Hashable {
     let plan: PlanArtifact?
     let dev: DevArtifact?
@@ -84,6 +109,8 @@ struct TaskArtifacts: Codable, Hashable {
     let review: ReviewArtifact?
     let merge: MergeArtifact?
     let deploy: DeployArtifact?
+    let verify: VerifyArtifact?
+    let rollback: RollbackArtifact?
 }
 
 struct TaskBudget: Codable, Hashable {
@@ -117,7 +144,8 @@ struct EngTask: Codable, Identifiable, Hashable {
     var needsAction: Bool {
         if status == "blocked" { return true }
         switch "\(stage):\(status)" {
-        case "plan:completed_unapproved", "pr:proposed", "review:awaiting_review", "review:comments_received", "review:comments_addressed", "merge:ready", "deploy:failed":
+        case "plan:completed_unapproved", "pr:proposed", "review:awaiting_review", "review:comments_received", "review:comments_addressed", "merge:ready", "deploy:failed",
+             "verify:awaiting_review", "verify:failed", "rollback:ready", "rollback:failed":
             return true
         default:
             return false

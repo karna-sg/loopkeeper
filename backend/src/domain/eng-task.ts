@@ -16,8 +16,8 @@
 
 import { createHash } from "node:crypto";
 
-/** The seven lifecycle stages, in order (PRD §7.1). */
-export const STAGES = ["plan", "dev", "test", "pr", "review", "merge", "deploy"] as const;
+/** The lifecycle stages, in order (PRD §7.1 + post-deploy verify/rollback). */
+export const STAGES = ["plan", "dev", "test", "pr", "review", "merge", "deploy", "verify", "rollback"] as const;
 export type Stage = (typeof STAGES)[number];
 
 // Per-stage status literal unions — exact PRD §7.1 wording. `creating`/`merging` are internal
@@ -31,6 +31,12 @@ export const PR_STATUSES = ["proposed", "creating", "created"] as const;
 export const REVIEW_STATUSES = ["awaiting_review", "comments_received", "comments_addressed", "approved"] as const;
 export const MERGE_STATUSES = ["ready", "merging", "merged"] as const;
 export const DEPLOY_STATUSES = ["deploying", "deployed", "failed"] as const;
+// Post-deploy: collect a result bundle (smoke + change summary) and wait for the operator to confirm
+// the change is live and good (a 4th gate) — or hand off to rollback.
+export const VERIFY_STATUSES = ["in_progress", "awaiting_review", "verified", "failed"] as const;
+// Undo a bad deploy: revert the merge + redeploy the previous good state. `ready` is armed-but-unconfirmed;
+// `ready → in_progress` is the (user-gated) execution, like merge.
+export const ROLLBACK_STATUSES = ["ready", "in_progress", "rolled_back", "failed"] as const;
 
 /**
  * Cross-cutting statuses reachable from any active stage. `blocked` = budget/iteration exhausted
@@ -49,6 +55,8 @@ export const STATUSES_BY_STAGE = {
   review: REVIEW_STATUSES,
   merge: MERGE_STATUSES,
   deploy: DEPLOY_STATUSES,
+  verify: VERIFY_STATUSES,
+  rollback: ROLLBACK_STATUSES,
 } as const satisfies Record<Stage, readonly string[]>;
 
 /** Any valid status string (per-stage tokens plus the cross-cutting ones). */
@@ -60,6 +68,8 @@ export type Status =
   | (typeof REVIEW_STATUSES)[number]
   | (typeof MERGE_STATUSES)[number]
   | (typeof DEPLOY_STATUSES)[number]
+  | (typeof VERIFY_STATUSES)[number]
+  | (typeof ROLLBACK_STATUSES)[number]
   | TaskStatus;
 
 /** A (stage, status) position in the machine. Serialized as two top-level fields. */
@@ -77,7 +87,7 @@ export const ACTORS = ["user", "agent", "system", "jira_sync"] as const;
 export type Actor = (typeof ACTORS)[number];
 
 /** Worker job kinds (the orchestration queue). */
-export const JOB_KINDS = ["plan", "dev_test", "create_pr", "address_comments", "merge", "deploy"] as const;
+export const JOB_KINDS = ["plan", "dev_test", "create_pr", "address_comments", "merge", "deploy", "verify", "rollback"] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 /** Job lifecycle in `eng_jobs`. */
@@ -183,6 +193,39 @@ export interface DeployArtifact {
   logTail: string | null;
 }
 
+/** Post-deploy verification: the result bundle the operator confirms (smoke + what shipped). */
+export interface VerifyArtifact {
+  /** The deployed commit (= merge sha). */
+  deployedSha: string | null;
+  /** One-line summary of what shipped (from the dev/PR artifacts). */
+  changeSummary: string;
+  /** Whether the post-deploy smoke check (e.g. prod /healthz) passed. */
+  healthOk: boolean;
+  /** Individual post-deploy checks. */
+  checks: { name: string; ok: boolean; detail: string | null }[];
+  /** Redacted smoke output / status note. */
+  output: string | null;
+  /** GitHub Actions deploy-run URL (for cross-reference). */
+  runUrl: string | null;
+  verifiedBy: string | null;
+  verifiedTs: string | null;
+}
+
+/** Rollback: revert the merge + redeploy the previous good state (code-only). */
+export interface RollbackArtifact {
+  /** The merge commit being undone. */
+  targetSha: string | null;
+  /** The revert commit created. */
+  revertSha: string | null;
+  /** The revert PR opened (then merged → triggers the redeploy). */
+  prUrl: string | null;
+  status: (typeof ROLLBACK_STATUSES)[number];
+  startedTs: string | null;
+  finishedTs: string | null;
+  triggeredBy: string | null;
+  logTail: string | null;
+}
+
 export interface TaskArtifacts {
   plan: PlanArtifact | null;
   dev: DevArtifact | null;
@@ -191,6 +234,8 @@ export interface TaskArtifacts {
   review: ReviewArtifact | null;
   merge: MergeArtifact | null;
   deploy: DeployArtifact | null;
+  verify: VerifyArtifact | null;
+  rollback: RollbackArtifact | null;
 }
 
 export const EMPTY_ARTIFACTS: TaskArtifacts = {
@@ -201,6 +246,8 @@ export const EMPTY_ARTIFACTS: TaskArtifacts = {
   review: null,
   merge: null,
   deploy: null,
+  verify: null,
+  rollback: null,
 };
 
 /** Per-task cost + iteration caps (PRD §8/§9). All counters accumulate; the worker escalates at a cap. */

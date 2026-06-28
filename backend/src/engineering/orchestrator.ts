@@ -17,6 +17,8 @@ export interface OrchestratorDeps {
   /** `github-actions` = CD runs in GH Actions and the deploy-status job observes it; `ssh` = legacy worker redeploy. */
   deployMode: "github-actions" | "ssh";
   deployEnv: string;
+  /** Prod URL the post-deploy verify stage smoke-checks (e.g. https://host/healthz). Null → skip the auto check. */
+  verifyUrl: string | null;
   now: () => string;
   /** Shared map; the orchestrator registers kill callbacks here so the worker cancel-watcher can signal them. */
   cancelRegistry?: Map<string, () => void>;
@@ -69,6 +71,10 @@ export class Orchestrator {
         return this.#handleMerge(job.taskId, this.#mergeMethod(job));
       case "deploy":
         return this.#handleDeploy(job.taskId);
+      case "verify":
+        return this.#handleVerify(job.taskId);
+      case "rollback":
+        return this.#handleRollback(job.taskId);
     }
   }
 
@@ -327,6 +333,76 @@ export class Orchestrator {
       now(),
     );
     this.#advance(taskId, { stage: "deploy", status: out.ok ? "deployed" : "failed" });
+  }
+
+  /** Post-deploy verify (stage 8): smoke-check prod + bundle what shipped, then wait for human sign-off. */
+  async #handleVerify(taskId: string): Promise<void> {
+    const { engStore, verifyUrl, now } = this.#d;
+    this.#advance(taskId, { stage: "verify", status: "in_progress" });
+    const task = this.#require(taskId);
+    const deployedSha = task.artifacts.deploy?.commitSha ?? task.artifacts.merge?.commitSha ?? null;
+    const changeSummary = truncate(task.artifacts.pr?.title ?? task.artifacts.dev?.summary ?? task.title, 140);
+    const runUrl = task.artifacts.deploy?.runUrl ?? null;
+
+    const checks: { name: string; ok: boolean; detail: string | null }[] = [];
+    let healthOk = true;
+    let output: string | null = null;
+    if (verifyUrl) {
+      try {
+        const res = await fetch(verifyUrl, { method: "GET", signal: AbortSignal.timeout(10_000) });
+        healthOk = res.ok;
+        checks.push({ name: "health", ok: res.ok, detail: `HTTP ${res.status}` });
+        output = `GET ${verifyUrl} → ${res.status}`;
+      } catch (err) {
+        healthOk = false;
+        const msg = err instanceof Error ? err.message : "request failed";
+        checks.push({ name: "health", ok: false, detail: msg });
+        output = redactSecrets(`GET ${verifyUrl} failed: ${msg}`);
+      }
+    } else {
+      checks.push({ name: "health", ok: true, detail: "no verify URL configured — confirm manually" });
+    }
+
+    engStore.setArtifact(taskId, { verify: { deployedSha, changeSummary, healthOk, checks, output, runUrl, verifiedBy: null, verifiedTs: null } }, now());
+    this.#advance(taskId, { stage: "verify", status: healthOk ? "awaiting_review" : "failed" });
+  }
+
+  /** Rollback (stage 9): revert the merge on a fresh branch, open + merge a revert PR → CD redeploys the good state. */
+  async #handleRollback(taskId: string): Promise<void> {
+    const { engStore, workspace, github, now } = this.#d;
+    if (!github) throw new Error("GitHub not configured");
+    const task = this.#require(taskId);
+    const targetSha = task.artifacts.merge?.commitSha ?? null;
+    if (!targetSha) throw new Error("no merge commit to roll back");
+
+    const revert = await workspace.revert(task, targetSha);
+    const title = `Rollback ${task.jiraKey}: revert ${truncate(task.title, 60)}`;
+    const body = `Auto-rollback of ${task.jiraKey}. Reverts ${targetSha} and redeploys the previous good state.${task.jiraUrl ? `\n\n${task.jiraUrl}` : ""}`;
+    const existing = await github.findOpenPr(task.repo, revert.branch);
+    const pr = existing ?? (await github.createPr({ repo: task.repo, head: revert.branch, base: task.defaultBranch, title, body }));
+    const state = await github.getPr(task.repo, pr.number);
+    let mergeSha: string | null = state.merged ? null : null;
+    if (!state.merged) {
+      const merged = await github.merge(task.repo, pr.number, "squash");
+      mergeSha = merged.sha;
+    }
+    engStore.setArtifact(
+      taskId,
+      {
+        rollback: {
+          targetSha,
+          revertSha: revert.revertSha,
+          prUrl: pr.url,
+          status: "rolled_back",
+          startedTs: task.artifacts.rollback?.startedTs ?? now(),
+          finishedTs: now(),
+          triggeredBy: task.artifacts.rollback?.triggeredBy ?? null,
+          logTail: mergeSha ? `reverted ${targetSha} via #${pr.number} (${mergeSha})` : `revert #${pr.number} already merged`,
+        },
+      },
+      now(),
+    );
+    this.#advance(taskId, { stage: "rollback", status: "rolled_back" });
   }
 
   #branchUrl(task: EngTask, branch: string): string | null {

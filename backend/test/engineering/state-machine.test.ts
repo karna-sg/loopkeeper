@@ -109,9 +109,12 @@ describe("state-machine: blocked / cancelled", () => {
   });
 
   it("cannot transition out of a terminal state", () => {
-    expect(isTerminal(ss("deploy", "deployed"))).toBe(true);
+    // deploy:deployed is no longer terminal — it flows into the post-deploy verify stage.
+    expect(isTerminal(ss("deploy", "deployed"))).toBe(false);
+    expect(isTerminal(ss("verify", "verified"))).toBe(true);
+    expect(isTerminal(ss("rollback", "rolled_back"))).toBe(true);
     expect(isTerminal(ss("dev", "cancelled"))).toBe(true);
-    expect(canTransition(ss("deploy", "deployed"), ss("deploy", "deploying"), "user").ok).toBe(false);
+    expect(canTransition(ss("verify", "verified"), ss("rollback", "ready"), "user").ok).toBe(false);
     expect(canTransition(ss("dev", "cancelled"), ss("dev", "in_progress"), "user").ok).toBe(false);
   });
 });
@@ -170,5 +173,29 @@ describe("state-machine: graph integrity", () => {
   });
   it("nextStatuses returns the adjacency list", () => {
     expect(nextStatuses(ss("test", "in_progress"))).toEqual(["test:passed", "test:failed"]);
+  });
+});
+
+describe("state-machine: verify + rollback stages", () => {
+  it("deploy:deployed kicks the verify job (no longer terminal)", () => {
+    expect(effectsFor(ss("deploy", "deployed"))).toEqual([{ kind: "enqueue_job", job: "verify" }]);
+    expect(nextStatuses(ss("deploy", "deployed"))).toEqual(["verify:in_progress"]);
+  });
+  it("verify sign-off (Gate 4) requires a user", () => {
+    expect(canTransition(ss("verify", "awaiting_review"), ss("verify", "verified"), "user")).toEqual({ ok: true });
+    expect(canTransition(ss("verify", "awaiting_review"), ss("verify", "verified"), "system").ok).toBe(false);
+  });
+  it("verify failure and deploy failure both offer rollback", () => {
+    expect(nextStatuses(ss("verify", "failed"))).toContain("rollback:ready");
+    expect(nextStatuses(ss("deploy", "failed"))).toContain("rollback:ready");
+  });
+  it("rollback execution (Gate 5) requires a user; enqueues the rollback job", () => {
+    expect(canTransition(ss("rollback", "ready"), ss("rollback", "in_progress"), "user")).toEqual({ ok: true });
+    expect(canTransition(ss("rollback", "ready"), ss("rollback", "in_progress"), "system").ok).toBe(false);
+    expect(effectsFor(ss("rollback", "in_progress"))).toEqual([{ kind: "enqueue_job", job: "rollback" }]);
+  });
+  it("verify:awaiting_review and rollback:ready need a human", () => {
+    expect(needsHuman(ss("verify", "awaiting_review"))).toBe(true);
+    expect(needsHuman(ss("rollback", "ready"))).toBe(true);
   });
 });
