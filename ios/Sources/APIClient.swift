@@ -113,7 +113,15 @@ struct APIClient {
     func addressComments(_ id: String) async throws { try await act("/tasks/\(id)/review/address-comments") }
     func approveReview(_ id: String) async throws { try await act("/tasks/\(id)/review/approve") }
     func approveMerge(_ id: String, method: String = "squash") async throws { try await act("/tasks/\(id)/merge/approve", body: ["method": method]) }
-    func retryTask(_ id: String) async throws { try await act("/tasks/\(id)/retry") }
+    func retryTask(_ id: String, maxUsdCents: Int? = nil, maxIterations: Int? = nil) async throws {
+        if maxUsdCents == nil, maxIterations == nil { try await act("/tasks/\(id)/retry"); return }
+        var req = makeRequest("/tasks/\(id)/retry", method: "POST", json: true)
+        var body: [String: Int] = [:]
+        if let maxUsdCents { body["maxUsdCents"] = maxUsdCents }
+        if let maxIterations { body["maxIterations"] = maxIterations }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        _ = try await run(req)
+    }
     func cancelTask(_ id: String) async throws { try await act("/tasks/\(id)/cancel") }
     func confirmVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/confirm") }
     func retryVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/retry") }

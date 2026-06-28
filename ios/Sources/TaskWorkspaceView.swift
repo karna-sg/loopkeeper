@@ -236,11 +236,8 @@ struct TaskWorkspaceView: View {
             case "deploy:failed":
                 deployFailedGate(task)
             default:
-                // blocked / deploy:failed / escalated — retry path.
-                if let err = task.lastError, !err.isEmpty {
-                    Text(err).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
-                }
-                actionButton("retry", .orange) { await model.retryTask(task); await reload() }
+                // blocked / escalated — retry path (with a budget-raise option when the cap was the cause).
+                blockedGate(task)
             }
         }
         .padding(.vertical, 12)
@@ -250,6 +247,31 @@ struct TaskWorkspaceView: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(Theme.statusTint(task.status).opacity(0.5), lineWidth: 1)
         )
+    }
+
+    /// blocked / escalated retry path. When the task hit a budget cap, offer to raise it and retry
+    /// (the backend /retry route accepts {maxUsdCents, maxIterations}); otherwise a plain retry.
+    @ViewBuilder private func blockedGate(_ task: EngTask) -> some View {
+        if let err = task.lastError, !err.isEmpty {
+            Text(err).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
+        }
+        if let b = task.budget, budgetExhausted(b) {
+            if (b.usdCentsUsed ?? 0) >= (b.maxUsdCents ?? Int.max) {
+                Text(String(format: "budget: $%.2f / $%.2f — cap reached", Double(b.usdCentsUsed ?? 0) / 100.0, Double(b.maxUsdCents ?? 0) / 100.0))
+                    .font(monoSmall).foregroundStyle(.orange)
+            } else {
+                Text("iterations: \(b.iterationsUsed ?? 0) / \(b.maxIterations ?? 0) — cap reached")
+                    .font(monoSmall).foregroundStyle(.orange)
+            }
+            actionButton("raise budget +$5 & retry", .green) { await model.retryRaising(task, addUsdCents: 500); await reload() }
+            actionButton("raise budget +$10 & retry", .blue) { await model.retryRaising(task, addUsdCents: 1000); await reload() }
+        } else {
+            actionButton("retry", .orange) { await model.retryTask(task); await reload() }
+        }
+    }
+
+    private func budgetExhausted(_ b: TaskBudget) -> Bool {
+        (b.usdCentsUsed ?? 0) >= (b.maxUsdCents ?? Int.max) || (b.iterationsUsed ?? 0) >= (b.maxIterations ?? Int.max)
     }
 
     @ViewBuilder private func planGate(_ task: EngTask) -> some View {
