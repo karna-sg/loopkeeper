@@ -3,7 +3,7 @@ import { EngStore } from "../../src/store/eng-store.ts";
 import { DeployMonitor, deployStatusFromRun, jobConclusion } from "../../src/engineering/deploy-monitor.ts";
 import { taskId } from "../../src/domain/eng-task.ts";
 import type { EngTaskInput } from "../../src/domain/eng-task.ts";
-import type { DeployRun, GithubPort, PrState, PullRequest } from "../../src/engineering/ports.ts";
+import type { DeployRun, DiffFile, GithubPort, PrState, PullRequest } from "../../src/engineering/ports.ts";
 
 const NOW = "2026-06-28T00:00:00Z";
 
@@ -44,6 +44,7 @@ class FakeGithub implements GithubPort {
   async getPr(): Promise<PrState> { return { number: 1, url: "u", reviewDecision: null, merged: false, comments: [] }; }
   async merge(): Promise<{ sha: string; merged: boolean }> { return { sha: "s", merged: true }; }
   async getDeployRun(): Promise<DeployRun | null> { return this.run; }
+  async getDiff(): Promise<DiffFile[]> { return []; }
 }
 
 function run(status: string, conclusion: string | null): DeployRun {

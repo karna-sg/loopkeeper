@@ -4,7 +4,7 @@ import { Orchestrator, applyTransition } from "../../src/engineering/orchestrato
 import { WorkerRunner } from "../../src/engineering/worker.ts";
 import { branchNameFor, taskId } from "../../src/domain/eng-task.ts";
 import type { EngTask, EngTaskInput } from "../../src/domain/eng-task.ts";
-import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, DeployRun, GithubPort, PrState, PullRequest, TestOutcome, WorktreeInfo } from "../../src/engineering/ports.ts";
+import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, DeployRun, DiffFile, GithubPort, PrState, PullRequest, TestOutcome, WorktreeInfo } from "../../src/engineering/ports.ts";
 
 const NOW = "2026-06-27T00:00:00Z";
 
@@ -84,6 +84,9 @@ class FakeGithub implements GithubPort {
   };
   async getDeployRun(): Promise<DeployRun | null> {
     return this.deployRun;
+  }
+  async getDiff(): Promise<DiffFile[]> {
+    return [];
   }
 }
 
