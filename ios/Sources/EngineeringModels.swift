@@ -225,3 +225,13 @@ struct DiffResponse: Decodable {
     let files: [DiffFile]
     let truncated: Bool
 }
+
+// MARK: - Activity Feed (GET /tasks/:id/activity)
+
+/// Response from `GET /tasks/:id/activity?offset=<bytes>`.
+/// Lines are pre-formatted by the backend: "tool: Read /path", "text: Planning...", "result: ok 12 turns $0.04".
+struct ActivityResponse: Decodable {
+    let lines: [String]
+    let nextOffset: Int
+    let done: Bool
+}

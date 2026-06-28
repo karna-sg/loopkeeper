@@ -20,6 +20,10 @@ struct TaskWorkspaceView: View {
     @State private var editingPlan = false
     @State private var inFlight = false
     @State private var pollTask: Task<Void, Never>?
+    @State private var activityLines: [String] = []
+    @State private var activityOffset: Int = 0
+    @State private var activityDone: Bool = false
+    @State private var activityPollTask: Task<Void, Never>?
     @State private var requirementsExpanded = true
     @State private var diffExpanded = false
 
@@ -37,6 +41,9 @@ struct TaskWorkspaceView: View {
                         if task.needsAction { gate(task) }
                         primaryAction(task)
                         requirements(task)
+                        if task.isRunning || !activityLines.isEmpty {
+                            ActivityFeedView(lines: activityLines, done: activityDone)
+                        }
                         pipeline(task)
                     }
                     .padding(.horizontal, 16)
@@ -52,7 +59,10 @@ struct TaskWorkspaceView: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { await load() }
             .refreshable { await load() }
-            .onDisappear { pollTask?.cancel() }
+            .onDisappear {
+                pollTask?.cancel()
+                activityPollTask?.cancel()
+            }
         }
     }
 
@@ -406,6 +416,12 @@ struct TaskWorkspaceView: View {
     }
 
     private func load() async {
+        // Reset activity state so a re-enter of the view re-reads from the start of the latest run.
+        activityLines = []
+        activityOffset = 0
+        activityDone = false
+        activityPollTask?.cancel()
+
         if let detail = await model.taskDetail(taskID) {
             task = detail.task
             events = detail.events
@@ -433,6 +449,27 @@ struct TaskWorkspaceView: View {
                 guard let detail = await model.taskDetail(taskID) else { continue }
                 await MainActor.run { task = detail.task; events = detail.events }
                 if detail.task.isRunning == false { break }
+            }
+        }
+        startActivityPollIfNeeded()
+    }
+
+    /// Poll /tasks/:id/activity every 2s, advancing the byte cursor to stream new lines.
+    private func startActivityPollIfNeeded() {
+        activityPollTask?.cancel()
+        guard task?.isRunning == true else { return }
+        activityPollTask = Task {
+            for _ in 0..<400 where !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !activityDone else { break }
+                if let response = await model.taskActivity(taskID, offset: activityOffset) {
+                    await MainActor.run {
+                        if !response.lines.isEmpty { activityLines.append(contentsOf: response.lines) }
+                        activityOffset = response.nextOffset
+                        activityDone = response.done
+                    }
+                    if response.done { break }
+                }
             }
         }
     }
