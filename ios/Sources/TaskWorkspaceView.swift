@@ -193,6 +193,8 @@ struct TaskWorkspaceView: View {
                     Text(err).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
                 }
                 actionButton("retry rollback", .orange) { await model.rollback(task); await reload() }
+            case "deploy:failed":
+                deployFailedGate(task)
             default:
                 // blocked / deploy:failed / escalated — retry path.
                 if let err = task.lastError, !err.isEmpty {
@@ -304,6 +306,32 @@ struct TaskWorkspaceView: View {
         actionButton("roll back", .orange) { await model.rollback(task); await reload() }
         Text("Rollback reverts the code (revert + redeploy). It does not undo data/migrations.")
             .font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    /// Deploy failed — the recovery depends on WHY: a build failure needs an agent code fix (not a CI
+    /// re-run); a transient infra failure can be re-run; either can roll back.
+    @ViewBuilder private func deployFailedGate(_ task: EngTask) -> some View {
+        let dep = task.artifacts?.deploy
+        if let url = dep?.runUrl, let u = URL(string: url) { linkButton("view run") { openURL(u) } }
+        if dep?.failureKind == "ci_build" {
+            if let e = dep?.ciError, !e.isEmpty {
+                Text(e).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
+            } else {
+                Text("CI/build failed on main.").font(monoSmall).foregroundStyle(.red)
+            }
+            actionButton("fix build (agent)", .blue) { await model.fixBuild(task); await reload() }
+            actionButton("roll back", .orange) { await model.rollback(task); await reload() }
+            Text("The build is broken — the agent fixes it (new PR → re-merge → redeploy). A CI re-run alone won't help.")
+                .font(monoSmall).foregroundStyle(.secondary)
+        } else {
+            if let log = dep?.logTail, !log.isEmpty {
+                Text(log).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
+            } else if let err = task.lastError, !err.isEmpty {
+                Text(err).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
+            }
+            actionButton(dep?.failureKind == "cd_infra" ? "retry deploy" : "retry", .orange) { await model.retryTask(task); await reload() }
+            actionButton("roll back", .orange) { await model.rollback(task); await reload() }
+        }
     }
 
     // MARK: stop action (visible while a stage is running)

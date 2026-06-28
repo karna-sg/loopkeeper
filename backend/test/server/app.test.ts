@@ -543,6 +543,45 @@ describe("engineering routes", () => {
     expect(engStore.events(id).find((e) => e.toStage === "rollback" && e.toStatus === "in_progress")).toMatchObject({ gateApproved: true, actor: "user" });
   });
 
+  /** Drive a task to deploy:failed with a given failureKind for the build-failure recovery tests. */
+  function driveToDeployFailed(engStore: EngStore, id: string, failureKind: "ci_build" | "cd_infra"): void {
+    driveTo(engStore, id, ["merge", "merged"]);
+    engStore.transition({ taskId: id, to: { stage: "deploy", status: "deploying" }, actor: "system", ts: NOW });
+    engStore.transition({ taskId: id, to: { stage: "deploy", status: "failed" }, actor: "system", ts: NOW });
+    engStore.setDeployArtifact(id, { env: "prod", status: "failed", startedTs: NOW, finishedTs: NOW, commitSha: "mergesha", runUrl: "https://github.com/karna/loopkeeper/actions/runs/9", ci: failureKind === "ci_build" ? "failure" : "success", cd: failureKind === "cd_infra" ? "failure" : null, failureKind, ciError: failureKind === "ci_build" ? "error TS2420" : null, logTail: null }, NOW);
+  }
+
+  it("fix-build sends a ci_build deploy failure back to dev (seedFix job)", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    driveToDeployFailed(engStore, id, "ci_build");
+    const res = await app.inject({ method: "POST", url: `/tasks/${id}/fix-build` });
+    expect(res.json()).toEqual({ started: true });
+    expect(engStore.get(id)).toMatchObject({ stage: "dev", status: "in_progress" });
+    const job = engStore.runningJobForTask(id);
+    expect(job?.kind).toBe("dev_test");
+    expect((JSON.parse(job?.payload ?? "{}") as { seedFix?: boolean }).seedFix).toBe(true);
+  });
+
+  it("retry on a ci_build deploy failure is rejected with a fix-build hint", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    driveToDeployFailed(engStore, id, "ci_build");
+    const res = await app.inject({ method: "POST", url: `/tasks/${id}/retry` });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toContain("fix-build");
+  });
+
+  it("fix-build is 409 on a cd_infra failure (only ci_build is fixable)", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1", github: { repo: "karna/loopkeeper", baseBranch: "main" } });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    driveToDeployFailed(engStore, id, "cd_infra");
+    expect((await app.inject({ method: "POST", url: `/tasks/${id}/fix-build` })).statusCode).toBe(409);
+  });
+
   it("GET /tasks/:id/diff returns 503 when GitHub is not configured", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
@@ -558,6 +597,8 @@ describe("engineering routes", () => {
       getPr: async () => ({ number: 1, url: "", reviewDecision: null, merged: false, comments: [] }),
       merge: async () => ({ sha: "abc", merged: true }),
       getDeployRun: async () => null,
+      getRunLog: async () => null,
+      rerunDeploy: async () => {},
       getDiff: async () => [],
     };
     const { app } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
@@ -571,6 +612,8 @@ describe("engineering routes", () => {
       getPr: async () => ({ number: 1, url: "", reviewDecision: null, merged: false, comments: [] }),
       merge: async () => ({ sha: "abc", merged: true }),
       getDeployRun: async () => null,
+      getRunLog: async () => null,
+      rerunDeploy: async () => {},
       getDiff: async () => [],
     };
     const { app, engStore } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
@@ -597,6 +640,8 @@ describe("engineering routes", () => {
       getPr: async () => ({ number: 1, url: "", reviewDecision: null, merged: false, comments: [] }),
       merge: async () => ({ sha: "abc", merged: true }),
       getDeployRun: async () => null,
+      getRunLog: async () => null,
+      rerunDeploy: async () => {},
       getDiff: async (_repo, args) => {
         // compare path: when branch is set but no prNumber
         if (!args.prNumber) return fakeDiff;

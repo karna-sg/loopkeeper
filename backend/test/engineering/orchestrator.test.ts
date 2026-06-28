@@ -77,9 +77,10 @@ class FakeGithub implements GithubPort {
     status: "completed",
     conclusion: "success",
     htmlUrl: "https://github.com/karna/loopkeeper/actions/runs/1",
+    id: 1,
     jobs: [
-      { name: "verify", status: "completed", conclusion: "success" },
-      { name: "deploy", status: "completed", conclusion: "success" },
+      { id: 1, name: "verify", status: "completed", conclusion: "success" },
+      { id: 2, name: "deploy", status: "completed", conclusion: "success" },
     ],
   };
   async getDeployRun(): Promise<DeployRun | null> {
@@ -88,6 +89,10 @@ class FakeGithub implements GithubPort {
   async getDiff(): Promise<DiffFile[]> {
     return [];
   }
+  async getRunLog(): Promise<string | null> {
+    return null;
+  }
+  async rerunDeploy(): Promise<void> {}
 }
 
 class FakeDeployer {
@@ -437,5 +442,38 @@ describe("orchestrator: verify + rollback stages", () => {
     expect(rb.targetSha).toBe("mergesha");
     expect(rb.revertSha).toContain("revert-");
     expect(rb.prUrl).toBeTruthy();
+  });
+});
+
+describe("orchestrator: build fix-forward (seedFix)", () => {
+  const PATH_TO_DEPLOY_FAILED: Array<[string, string, "user" | "system", boolean]> = [
+    ["plan", "in_progress", "user", false], ["plan", "completed_unapproved", "system", false], ["plan", "approved", "user", true],
+    ["dev", "in_progress", "system", false], ["dev", "done", "system", false],
+    ["test", "in_progress", "system", false], ["test", "passed", "system", false],
+    ["pr", "proposed", "system", false], ["pr", "creating", "user", true], ["pr", "created", "system", false],
+    ["review", "awaiting_review", "system", false], ["review", "approved", "system", false],
+    ["merge", "ready", "system", false], ["merge", "merging", "user", true], ["merge", "merged", "system", false],
+    ["deploy", "deploying", "system", false], ["deploy", "failed", "system", false],
+  ];
+
+  it("re-enters dev seeded with the CI error and drives back to a proposed PR", async () => {
+    const runner = new FakeAgentRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+    engStore.setArtifact(id, { merge: { commitSha: "mergesha", mergedTs: NOW, mergedBy: null, method: "squash" } }, NOW);
+    for (const [stage, status, actor, gate] of PATH_TO_DEPLOY_FAILED) {
+      engStore.transition({ taskId: id, to: { stage: stage as never, status: status as never }, actor, gateApproved: gate, ts: NOW });
+    }
+    engStore.setDeployArtifact(id, { env: "prod", status: "failed", startedTs: NOW, finishedTs: NOW, commitSha: "mergesha", runUrl: "u", ci: "failure", cd: null, failureKind: "ci_build", ciError: "error TS2420 missing getDiff on FakeGithub", logTail: null }, NOW);
+
+    // fix-build: back to dev + a seedFix dev_test job (what POST /tasks/:id/fix-build does).
+    engStore.transition({ taskId: id, to: { stage: "dev", status: "in_progress" }, actor: "user", ts: NOW });
+    engStore.enqueue({ taskId: id, kind: "dev_test", payload: { seedFix: true }, dedupeKey: `${id}:dev_test` }, NOW);
+    await drain(worker);
+
+    const firstDev = runner.calls.find((c) => c.stage === "dev");
+    expect(firstDev?.prompt).toContain("TS2420"); // seeded with the captured CI error, not a re-implementation
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" }); // local verify passed → re-proposes
   });
 });

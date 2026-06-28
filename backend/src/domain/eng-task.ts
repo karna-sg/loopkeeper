@@ -189,6 +189,11 @@ export interface DeployArtifact {
   ci: string | null;
   /** CD (deploy) job conclusion. */
   cd: string | null;
+  /** Why a deploy failed: `ci_build` (verify job — code/build broken, needs a fix-forward), `cd_infra`
+   *  (deploy job — transient, re-run the workflow), `no_run` (no run found / timeout). Null otherwise. */
+  failureKind: "ci_build" | "cd_infra" | "no_run" | null;
+  /** Redacted tail of the failing CI job's log — the actual build error, for fix-forward + display. */
+  ciError: string | null;
   /** Truncated, redacted redeploy output (ssh mode) or a status note (github-actions mode). */
   logTail: string | null;
 }
