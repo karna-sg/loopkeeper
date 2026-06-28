@@ -10,7 +10,6 @@ import { registerDevices } from "./routes/devices.ts";
 import { registerNudge } from "./routes/nudge.ts";
 import { registerChannels } from "./routes/channels.ts";
 import { registerEngineering } from "./routes/engineering.ts";
-import { registerVersion } from "./routes/version.ts";
 import { EngStore } from "../store/eng-store.ts";
 import { NudgeService } from "../nudge/nudge-service.ts";
 import { ApnsClient } from "../push/apns-client.ts";
@@ -47,14 +46,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const token = deps.config.apiToken;
     if (!token) return;
     const path = (req.url.split("?")[0] ?? "");
-    if (path === "/healthz" || path === "/version" || path.startsWith("/auth/")) return;
+    if (path === "/healthz" || path.startsWith("/auth/")) return;
     if (req.headers.authorization !== `Bearer ${token}`) {
       await reply.code(401).send({ error: "unauthorized" });
     }
   });
 
   registerHealth(app, deps);
-  registerVersion(app, deps);
   registerAuth(app, deps);
   registerLoops(app, deps);
   registerScan(app, deps);
