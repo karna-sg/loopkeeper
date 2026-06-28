@@ -56,6 +56,7 @@ struct APIClient {
     func notALoop(_ id: String) async throws { try await act("/loops/\(id)/not-a-loop") }
     func delegate(_ id: String, to: String) async throws { try await act("/loops/\(id)/delegate", body: ["to": to]) }
     func stats() async throws -> Stats { try await getJSON("/stats") }
+    func engStats() async throws -> EngStats { try await getJSON("/eng/stats") }
     func undo() async throws { try await act("/undo") }
     func recur(_ id: String, rule: String) async throws { try await act("/loops/\(id)/recur", body: ["rule": rule]) }
     func snoozeUntilReply(_ id: String) async throws { try await act("/loops/\(id)/snooze", body: ["condition": "reply"]) }

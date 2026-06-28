@@ -5,6 +5,7 @@ import type { EngTask, Status } from "../../domain/eng-task.ts";
 import { applyTransition } from "../../engineering/orchestrator.ts";
 import { isTerminal, shouldRetryAfterBuildFailure } from "../../engineering/state-machine.ts";
 import { RestGithubClient } from "../../engineering/adapters/rest-github.ts";
+import { buildEngStats } from "../../eng-stats.ts";
 
 /** Live = a stage is executing; the status endpoint reports running vs stalled vs idle. */
 const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>(["in_progress", "creating", "merging", "deploying"]);
@@ -80,6 +81,10 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
   function detail(): { actorDetail?: string } {
     return config.selfAccountId ? { actorDetail: config.selfAccountId } : {};
   }
+
+  // --- Stats ---
+
+  app.get("/eng/stats", async () => buildEngStats(engStore.list(), deps.now()));
 
   // --- Reads ---
 

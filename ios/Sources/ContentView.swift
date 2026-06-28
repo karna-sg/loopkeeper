@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var showPeople = false
     @State private var showWeekly = false
     @State private var showBragDoc = false
+    @State private var showEngInsights = false
 
     var body: some View {
         @Bindable var model = model
@@ -39,6 +40,7 @@ struct ContentView: View {
                     .sheet(isPresented: $showPeople) { PeopleView() }
                     .sheet(isPresented: $showWeekly) { WeeklyReviewView() }
                     .sheet(isPresented: $showBragDoc) { BragDocView() }
+                    .sheet(isPresented: $showEngInsights) { EngInsightsView() }
                     .onReceive(NotificationCenter.default.publisher(for: .loopkeeperDidMutate)) { _ in
                         Task { await model.refresh() }
                     }
@@ -105,6 +107,7 @@ struct ContentView: View {
             }
             Divider()
             Button { showInsights = true } label: { Label("Insights", systemImage: "chart.bar") }
+            Button { showEngInsights = true } label: { Label("Eng insights", systemImage: "cpu") }
             Button { showPeople = true } label: { Label("People", systemImage: "person.2") }
             Divider()
             Button { showStandup = true } label: { Label("Standup roll-up", systemImage: "text.append") }
