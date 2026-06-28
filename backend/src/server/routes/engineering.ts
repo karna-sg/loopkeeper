@@ -1,3 +1,4 @@
+import { open } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import type { AppDeps } from "../deps.ts";
 import type { EngTask, Status } from "../../domain/eng-task.ts";
@@ -7,6 +8,53 @@ import { RestGithubClient } from "../../engineering/adapters/rest-github.ts";
 
 /** Live = a stage is executing; the status endpoint reports running vs stalled vs idle. */
 const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>(["in_progress", "creating", "merging", "deploying"]);
+
+const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "aborted", "budget_exceeded"]);
+
+/**
+ * Parse one redacted JSONL line from an agent log into a human-readable activity string.
+ * Returns null for lines that should be skipped (system, user, malformed JSON, empty).
+ * Exported for unit testing.
+ */
+export function formatActivityLine(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let evt: Record<string, unknown>;
+  try {
+    evt = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  if (evt.type === "assistant") {
+    const msg = evt.message as { content?: unknown } | undefined;
+    if (!msg || !Array.isArray(msg.content)) return null;
+    const parts: string[] = [];
+    for (const c of msg.content as Array<Record<string, unknown>>) {
+      if (c.type === "text" && typeof c.text === "string" && c.text.trim()) {
+        parts.push(`text: ${c.text.trim().replace(/\s+/g, " ").slice(0, 200)}`);
+      } else if (c.type === "tool_use" && typeof c.name === "string") {
+        const input = (c.input ?? {}) as Record<string, unknown>;
+        const firstKey = Object.keys(input)[0];
+        const detail = firstKey !== undefined ? ` ${String(input[firstKey]).slice(0, 80)}` : "";
+        parts.push(`tool: ${c.name}${detail}`);
+      }
+    }
+    return parts.length > 0 ? parts.join("\n") : null;
+  }
+
+  if (evt.type === "result") {
+    if (evt.is_error === true) {
+      const msg = typeof evt.result === "string" ? evt.result.slice(0, 120) : "error";
+      return `result: error ${msg}`;
+    }
+    const turns = typeof evt.num_turns === "number" ? ` ${evt.num_turns} turns` : "";
+    const cost = typeof evt.total_cost_usd === "number" ? ` $${evt.total_cost_usd.toFixed(2)}` : "";
+    return `result: ok${turns}${cost}`;
+  }
+
+  return null;
+}
 
 function runStateFor(task: EngTask, hasLiveJob: boolean): "running" | "stalled" | "idle" {
   if (!ACTIVE_STATUSES.has(task.status)) return "idle";
@@ -80,6 +128,59 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
       usdCents: task.budget.usdCentsUsed,
       lastError: task.lastError,
     };
+  });
+
+  // --- Live activity feed (LP-11) ---
+
+  app.get("/tasks/:id/activity", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+
+    const runs = engStore.agentRuns(id);
+    const run = runs.at(-1) ?? null;
+    if (!run || !run.logPath) return { lines: [], nextOffset: 0, done: true };
+
+    const { offset: rawOffset } = req.query as { offset?: string };
+    const startOffset = Math.max(0, parseInt(rawOffset ?? "0", 10) || 0);
+    const runDone = TERMINAL_RUN_STATUSES.has(run.status);
+
+    const BUF_SIZE = 65536;
+    let fh: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      fh = await open(run.logPath, "r");
+      const { size: fileSize } = await fh.stat();
+      const offset = Math.min(startOffset, fileSize);
+
+      if (offset >= fileSize) return { lines: [], nextOffset: fileSize, done: runDone };
+
+      const bytesToRead = Math.min(BUF_SIZE, fileSize - offset);
+      const buf = Buffer.alloc(bytesToRead);
+      const { bytesRead } = await fh.read(buf, 0, bytesToRead, offset);
+      const chunk = buf.subarray(0, bytesRead).toString("utf8");
+
+      // Only emit complete lines to avoid a mid-write partial at the tail.
+      const lastNewline = chunk.lastIndexOf("\n");
+      if (lastNewline === -1) return { lines: [], nextOffset: offset, done: false };
+
+      const complete = chunk.slice(0, lastNewline);
+      // Use byte length (not char length) for the cursor so multibyte chars don't desync.
+      const nextOffset = offset + Buffer.byteLength(complete, "utf8") + 1; // +1 for the \n
+
+      const lines: string[] = [];
+      for (const raw of complete.split("\n")) {
+        const formatted = formatActivityLine(raw);
+        if (formatted !== null) lines.push(...formatted.split("\n")); // multi-block assistant
+      }
+
+      return { lines, nextOffset, done: runDone && nextOffset >= fileSize };
+    } catch (err) {
+      // Log file not yet created (runner hasn't started writing) — normal race at run start.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { lines: [], nextOffset: 0, done: runDone };
+      throw err;
+    } finally {
+      await fh?.close();
+    }
   });
 
   // --- Jira sync (FR-2) ---

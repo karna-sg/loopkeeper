@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildApp } from "../../src/server/app.ts";
 import type { AppDeps } from "../../src/server/deps.ts";
 import { loadConfig } from "../../src/server/config.ts";
@@ -661,5 +664,106 @@ describe("engineering routes", () => {
     expect(res.files[0]).toMatchObject({ path: "src/foo.ts", additions: 2, deletions: 1 });
     expect(res.files[0]?.hunks[0]?.lines).toHaveLength(3);
     expect(res.truncated).toBe(false);
+  });
+
+  // --- Activity feed (LP-11) ---
+
+  it("GET /tasks/:id/activity returns 404 for unknown task", async () => {
+    const { app } = makeApp();
+    expect((await app.inject({ method: "GET", url: "/tasks/nope/activity" })).statusCode).toBe(404);
+  });
+
+  it("GET /tasks/:id/activity returns done:true and empty lines when no agent runs exist", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+    const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity` })).json() as { lines: string[]; nextOffset: number; done: boolean };
+    expect(body).toEqual({ lines: [], nextOffset: 0, done: true });
+  });
+
+  it("GET /tasks/:id/activity returns done:true when run has no logPath", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+    // Insert a running run with no logPath (simulates a run that never opened a log file).
+    engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sess-1", iteration: 1, startedTs: NOW });
+    const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity` })).json() as { lines: string[]; nextOffset: number; done: boolean };
+    expect(body).toEqual({ lines: [], nextOffset: 0, done: true });
+  });
+
+  it("GET /tasks/:id/activity reads and formats JSONL from log file", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+
+    const logDir = mkdtempSync(join(tmpdir(), "lk-test-"));
+    const taskLogDir = join(logDir, id);
+    mkdirSync(taskLogDir, { recursive: true });
+    const logPath = join(taskLogDir, "plan-sess-1.jsonl");
+
+    const content = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Planning the feature." }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "/src/app.ts" } }] } }),
+      JSON.stringify({ type: "result", is_error: false, result: "", num_turns: 5, total_cost_usd: 0.03 }),
+    ].join("\n") + "\n";
+    writeFileSync(logPath, content);
+
+    const runId = engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sess-1", iteration: 1, startedTs: NOW });
+    engStore.finishAgentRun(runId, { status: "succeeded", finishedTs: NOW, exitCode: 0, usdCents: 3, numTurns: 5, resultSummary: "done", logPath });
+
+    const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity?offset=0` })).json() as { lines: string[]; nextOffset: number; done: boolean };
+    expect(body.lines).toEqual([
+      "text: Planning the feature.",
+      "tool: Read /src/app.ts",
+      "result: ok 5 turns $0.03",
+    ]);
+    expect(body.nextOffset).toBeGreaterThan(0);
+    expect(body.done).toBe(true);
+  });
+
+  it("GET /tasks/:id/activity respects the offset cursor (returns only new lines)", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+
+    const logDir = mkdtempSync(join(tmpdir(), "lk-test-"));
+    const taskLogDir = join(logDir, id);
+    mkdirSync(taskLogDir, { recursive: true });
+    const logPath = join(taskLogDir, "plan-sess-2.jsonl");
+
+    const firstLine = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "First." }] } }) + "\n";
+    const secondLine = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Second." }] } }) + "\n";
+    writeFileSync(logPath, firstLine + secondLine);
+
+    const runId = engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sess-2", iteration: 1, startedTs: NOW });
+    engStore.finishAgentRun(runId, { status: "succeeded", finishedTs: NOW, exitCode: 0, usdCents: 1, numTurns: 2, resultSummary: "done", logPath });
+
+    const firstByteLen = Buffer.byteLength(firstLine, "utf8");
+
+    // Read only the second line by providing the byte offset of the first line.
+    const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity?offset=${firstByteLen}` })).json() as { lines: string[] };
+    expect(body.lines).toEqual(["text: Second."]);
+  });
+
+  it("GET /tasks/:id/activity: offset at EOF returns empty lines, done:true for terminal run", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+
+    const logDir = mkdtempSync(join(tmpdir(), "lk-test-"));
+    const taskLogDir = join(logDir, id);
+    mkdirSync(taskLogDir, { recursive: true });
+    const logPath = join(taskLogDir, "plan-sess-3.jsonl");
+    const content = JSON.stringify({ type: "result", is_error: false, result: "" }) + "\n";
+    writeFileSync(logPath, content);
+
+    const runId = engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sess-3", iteration: 1, startedTs: NOW });
+    engStore.finishAgentRun(runId, { status: "succeeded", finishedTs: NOW, exitCode: 0, usdCents: 0, numTurns: 1, resultSummary: "done", logPath });
+
+    const offset = Buffer.byteLength(content, "utf8");
+    const body = (await app.inject({ method: "GET", url: `/tasks/${id}/activity?offset=${offset}` })).json() as { lines: string[]; nextOffset: number; done: boolean };
+    expect(body.lines).toEqual([]);
+    expect(body.nextOffset).toBe(offset);
+    expect(body.done).toBe(true);
   });
 });

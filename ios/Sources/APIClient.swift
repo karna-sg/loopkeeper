@@ -98,6 +98,9 @@ struct APIClient {
     func taskDetail(_ id: String) async throws -> TaskDetailResponse { try await getJSON("/tasks/\(id)") }
     func taskStatus(_ id: String) async throws -> TaskStatusResponse { try await getJSON("/tasks/\(id)/status") }
     func taskDiff(_ id: String) async throws -> DiffResponse { try await getJSON("/tasks/\(id)/diff") }
+    func taskActivity(_ id: String, offset: Int = 0) async throws -> ActivityResponse {
+        try await getJSON("/tasks/\(id)/activity?offset=\(offset)")
+    }
     func syncTasks() async throws { try await act("/tasks/sync") }
 
     func preparePlan(_ id: String) async throws { try await act("/tasks/\(id)/prepare-plan") }

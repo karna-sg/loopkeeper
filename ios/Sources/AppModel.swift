@@ -266,6 +266,11 @@ final class AppModel {
         }
     }
 
+    /// Tail the agent's redacted JSONL log from `offset`. Best-effort: returns nil on transient errors.
+    func taskActivity(_ id: String, offset: Int = 0) async -> ActivityResponse? {
+        try? await api.taskActivity(id, offset: offset)
+    }
+
     /// Pull newly-assigned Jira tickets into the store (`POST /tasks/sync`), then re-read the list.
     /// This is the ONLY path that ingests new Jira tasks — plain refresh just re-reads what's stored.
     /// Manual trigger from the `# tasks` header. Surfaces real failures, but stays quiet when Jira
