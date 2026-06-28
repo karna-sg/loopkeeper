@@ -47,7 +47,7 @@ describe("parsePatch", () => {
     const patch = ["@@ -1,1 +1,1 @@", "+TOKEN=sk-ant-api03-supersecretkey1234567890abc"].join("\n");
     const hunks = parsePatch(patch);
     expect(hunks[0]?.lines[0]?.text).not.toContain("sk-ant-api03");
-    expect(hunks[0]?.lines[0]?.text).toContain("[REDACTED]");
+    expect(hunks[0]?.lines[0]?.text).toContain("[REDACTED:secret-shaped]");
   });
 
   it("caps lines at MAX_DIFF_LINES (300) per hunk", () => {
