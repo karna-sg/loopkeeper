@@ -1,4 +1,4 @@
-import type { GithubPort, PrState, PullRequest } from "../ports.ts";
+import type { DeployRun, GithubPort, PrState, PullRequest } from "../ports.ts";
 import type { ReviewComment } from "../../domain/eng-task.ts";
 
 /**
@@ -71,6 +71,24 @@ export class RestGithubClient implements GithubPort {
     const data = json as { merged?: boolean; sha?: string; message?: string };
     if (!data.merged || !data.sha) throw new Error(`GitHub merge failed (${status}): ${data.message ?? "unknown"}`);
     return { sha: data.sha, merged: true };
+  }
+
+  async getDeployRun(repo: string, sha: string): Promise<DeployRun | null> {
+    // The push-to-main run(s) for this commit; prefer the deploy workflow, else the latest.
+    const list = (await this.#get(`/repos/${repo}/actions/runs?head_sha=${sha}&event=push&per_page=20`)) as {
+      workflow_runs?: Array<{ id: number; name?: string; path?: string; status: string; conclusion: string | null; html_url: string; created_at: string }>;
+    };
+    const runs = list.workflow_runs ?? [];
+    const run = runs.find((r) => (r.path ?? "").endsWith("deploy.yml") || /deploy/i.test(r.name ?? "")) ?? runs[0];
+    if (!run) return null;
+    let jobs: DeployRun["jobs"] = [];
+    try {
+      const j = (await this.#get(`/repos/${repo}/actions/runs/${run.id}/jobs`)) as { jobs?: Array<{ name: string; status: string; conclusion: string | null }> };
+      jobs = (j.jobs ?? []).map((x) => ({ name: x.name, status: x.status, conclusion: x.conclusion }));
+    } catch {
+      // jobs breakdown is best-effort; the run status/conclusion is what drives the stage.
+    }
+    return { status: run.status, conclusion: run.conclusion, htmlUrl: run.html_url, jobs };
   }
 }
 

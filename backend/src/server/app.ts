@@ -30,6 +30,7 @@ import { CloudJiraClient, BasicJiraClient } from "../engineering/jira/jira-clien
 import type { JiraTokenProvider } from "../engineering/jira/jira-client.ts";
 import { JiraSyncService } from "../engineering/jira/jira-sync.ts";
 import { PrMonitor } from "../engineering/pr-monitor.ts";
+import { DeployMonitor } from "../engineering/deploy-monitor.ts";
 import { EngNotifier } from "../engineering/eng-notify.ts";
 import { RestGithubClient } from "../engineering/adapters/rest-github.ts";
 import type { UserIdentity } from "../domain/message.ts";
@@ -224,6 +225,17 @@ function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngSt
     run: async () => {
       if (!config.githubToken) throw new Error("GitHub not configured");
       await new PrMonitor(engStore, new RestGithubClient(config.githubToken), () => new Date().toISOString()).run();
+    },
+  });
+  // FR-24: observe the GitHub Actions CD run for merged tasks → deploy:deployed/failed. Only in
+  // github-actions deploy mode; throws (isolated) until GitHub is configured.
+  scheduler.add({
+    name: "deploy-status",
+    intervalMs: config.prPollEveryMin * 60_000,
+    run: async () => {
+      if (config.deploy?.mode !== "github-actions") return; // ssh mode finalizes deploy in the worker
+      if (!config.githubToken) throw new Error("GitHub not configured");
+      await new DeployMonitor(engStore, new RestGithubClient(config.githubToken), () => new Date().toISOString(), config.eng.runTimeoutMs).run();
     },
   });
   // FR-25: push when a task needs a human (plan/PR/merge ready, comments, deploy failed, blocked).

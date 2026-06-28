@@ -4,7 +4,7 @@ import { Orchestrator, applyTransition } from "../../src/engineering/orchestrato
 import { WorkerRunner } from "../../src/engineering/worker.ts";
 import { branchNameFor, taskId } from "../../src/domain/eng-task.ts";
 import type { EngTask, EngTaskInput } from "../../src/domain/eng-task.ts";
-import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, GithubPort, PrState, PullRequest, TestOutcome, WorktreeInfo } from "../../src/engineering/ports.ts";
+import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, DeployRun, GithubPort, PrState, PullRequest, TestOutcome, WorktreeInfo } from "../../src/engineering/ports.ts";
 
 const NOW = "2026-06-27T00:00:00Z";
 
@@ -70,6 +70,18 @@ class FakeGithub implements GithubPort {
     this.merged = true;
     return { sha: "mergesha", merged: true };
   }
+  deployRun: DeployRun | null = {
+    status: "completed",
+    conclusion: "success",
+    htmlUrl: "https://github.com/karna/loopkeeper/actions/runs/1",
+    jobs: [
+      { name: "verify", status: "completed", conclusion: "success" },
+      { name: "deploy", status: "completed", conclusion: "success" },
+    ],
+  };
+  async getDeployRun(): Promise<DeployRun | null> {
+    return this.deployRun;
+  }
 }
 
 class FakeDeployer {
@@ -78,7 +90,7 @@ class FakeDeployer {
   }
 }
 
-function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean } = {}) {
+function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh" } = {}) {
   const engStore = new EngStore(":memory:");
   const runner = opts.runner ?? new FakeAgentRunner();
   const tester = opts.tester ?? new FakeTester(true);
@@ -91,6 +103,7 @@ function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEn
     github,
     deployer: new FakeDeployer(),
     deployEnabled: opts.deployEnabled ?? true,
+    deployMode: opts.deployMode ?? "ssh",
     deployEnv: "prod",
     now: () => NOW,
   });
@@ -259,6 +272,7 @@ describe("worker: cancel-watcher integration", () => {
       github: new FakeGithub(),
       deployer: new FakeDeployer(),
       deployEnabled: false,
+      deployMode: "ssh",
       deployEnv: "prod",
       now: () => NOW,
       cancelRegistry,
@@ -308,5 +322,40 @@ describe("orchestrator: deploy disabled is a no-op", () => {
     await drain(worker);
     // Merged, then the deploy job runs but is a no-op (disabled) → stays at merge:merged.
     expect(engStore.get(id)).toMatchObject({ stage: "merge", status: "merged" });
+  });
+});
+
+describe("orchestrator: github-actions deploy mode observes (no SSH)", () => {
+  it("advances to deploy:deploying and records the merge sha; the run is finalized by the monitor", async () => {
+    const { engStore, worker } = harness({ deployMode: "github-actions" });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+    const path: Array<{ stage: EngTask["stage"]; status: EngTask["status"]; gate?: boolean; actor: "user" | "system" }> = [
+      { stage: "plan", status: "in_progress", actor: "user" },
+      { stage: "plan", status: "completed_unapproved", actor: "system" },
+      { stage: "plan", status: "approved", gate: true, actor: "user" },
+      { stage: "dev", status: "in_progress", actor: "system" },
+      { stage: "dev", status: "done", actor: "system" },
+      { stage: "test", status: "in_progress", actor: "system" },
+      { stage: "test", status: "passed", actor: "system" },
+      { stage: "pr", status: "proposed", actor: "system" },
+      { stage: "pr", status: "creating", gate: true, actor: "user" },
+      { stage: "pr", status: "created", actor: "system" },
+      { stage: "review", status: "awaiting_review", actor: "system" },
+      { stage: "review", status: "approved", actor: "system" },
+      { stage: "merge", status: "ready", actor: "system" },
+      { stage: "merge", status: "merging", gate: true, actor: "user" },
+    ];
+    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null } }, NOW);
+    for (const s of path) {
+      const r = engStore.transition({ taskId: id, to: { stage: s.stage, status: s.status }, actor: s.actor, ...(s.gate ? { gateApproved: true } : {}), ts: NOW });
+      expect(r.ok, `${s.stage}:${s.status}`).toBe(true);
+    }
+    engStore.enqueue({ taskId: id, kind: "merge", dedupeKey: `${id}:merge` }, NOW);
+    await drain(worker);
+    // Merged → deploy job → observe-mode: deploying (NOT deployed — GitHub Actions + the monitor finalize it).
+    expect(engStore.get(id)).toMatchObject({ stage: "deploy", status: "deploying" });
+    expect(engStore.get(id)!.artifacts.merge?.commitSha).toBe("mergesha");
+    expect(engStore.get(id)!.artifacts.deploy).toMatchObject({ status: "deploying", commitSha: "mergesha" });
   });
 });

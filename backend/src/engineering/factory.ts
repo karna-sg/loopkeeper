@@ -44,9 +44,11 @@ export function buildOrchestrator(config: ServerConfig, engStore: EngStore, canc
     authorEmail: config.eng.gitAuthorEmail,
   });
   const tester = new VitestTester({ ...DEFAULT_VITEST_CONFIG, timeoutMs: config.eng.runTimeoutMs });
-  const deployer = config.deploy
-    ? new SshDeployer({ host: config.deploy.sshHost, user: config.deploy.sshUser, keyPath: config.deploy.keyPath, timeoutMs: config.eng.runTimeoutMs })
-    : null;
+  // SSH deployer only exists in legacy ssh mode; github-actions mode observes the GH run instead.
+  const deployer =
+    config.deploy?.mode === "ssh"
+      ? new SshDeployer({ host: config.deploy.sshHost, user: config.deploy.sshUser, keyPath: config.deploy.keyPath, timeoutMs: config.eng.runTimeoutMs })
+      : null;
   return new Orchestrator({
     engStore,
     agentRunner,
@@ -55,6 +57,7 @@ export function buildOrchestrator(config: ServerConfig, engStore: EngStore, canc
     github: buildGithubPort(config),
     deployer,
     deployEnabled: config.deploy?.enabled ?? false,
+    deployMode: config.deploy?.mode ?? "github-actions",
     deployEnv: "prod",
     now: () => new Date().toISOString(),
     cancelRegistry,

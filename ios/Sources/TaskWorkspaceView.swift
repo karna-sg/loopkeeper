@@ -488,10 +488,34 @@ private struct StageBlock: View {
                 (Text("\(dep.env ?? "prod"): ").foregroundColor(.secondary)
                     + Text(dep.status ?? "—").foregroundColor(Theme.statusTint(dep.status ?? "")))
                     .font(mono).textSelection(.enabled)
+                if dep.ci != nil || dep.cd != nil {
+                    (Text("CI ").foregroundColor(.secondary) + Text(ciCdLabel(dep.ci)).foregroundColor(ciCdColor(dep.ci))
+                        + Text("   CD ").foregroundColor(.secondary) + Text(ciCdLabel(dep.cd)).foregroundColor(ciCdColor(dep.cd)))
+                        .font(mono).textSelection(.enabled)
+                }
+                if let url = dep.runUrl, let u = URL(string: url) { link("view run", u) }
                 if let log = dep.logTail, !log.isEmpty { bodyText(log, color: .secondary) }
             }
         default:
             EmptyView()
+        }
+    }
+
+    /// A GitHub Actions job conclusion as a terminal-style label.
+    private func ciCdLabel(_ c: String?) -> String {
+        switch c {
+        case "success": return "✓ passed"
+        case "failure", "cancelled", "timed_out": return "✗ \(c!)"
+        case nil: return "… running"
+        default: return c ?? "—"
+        }
+    }
+    private func ciCdColor(_ c: String?) -> Color {
+        switch c {
+        case "success": return .secondary
+        case "failure", "cancelled", "timed_out": return .red
+        case nil: return .blue
+        default: return .secondary
         }
     }
 
