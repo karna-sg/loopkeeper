@@ -272,6 +272,7 @@ describe("worker: cancel-watcher integration", () => {
       github: new FakeGithub(),
       deployer: new FakeDeployer(),
       deployEnabled: false,
+      deployMode: "ssh",
       deployEnv: "prod",
       now: () => NOW,
       cancelRegistry,
