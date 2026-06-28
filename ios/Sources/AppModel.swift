@@ -309,6 +309,17 @@ final class AppModel {
     func approveReview(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approveReview(t.id) }) { lastActionLabel = "Review approved — ready to merge" } }
     func approveMerge(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approveMerge(t.id) }) { lastActionLabel = "Merging" } }
     func retryTask(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.retryTask(t.id) }) { lastActionLabel = "Retrying" } }
+    /// Retry a budget-blocked task with a raised cap. Lifts the $ cap by `addUsdCents` above current spend
+    /// and always grants iteration headroom, so it unblocks both USD- and iteration-capped tasks.
+    func retryRaising(_ t: EngTask, addUsdCents: Int) async {
+        Haptics.tap()
+        let b = t.budget
+        let newUsd = max(b?.maxUsdCents ?? 0, b?.usdCentsUsed ?? 0) + addUsdCents
+        let newIter = max(b?.maxIterations ?? 0, b?.iterationsUsed ?? 0) + 4
+        if await mutateTasks({ try await api.retryTask(t.id, maxUsdCents: newUsd, maxIterations: newIter) }) {
+            lastActionLabel = "Retrying (+$\(addUsdCents / 100))"
+        }
+    }
     func cancelTask(_ t: EngTask) async { Haptics.warning(); if await mutateTasks({ try await api.cancelTask(t.id) }) { lastActionLabel = "Stopping…" } }
     func confirmVerify(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.confirmVerify(t.id) }) { lastActionLabel = "Verified" } }
     func retryVerify(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.retryVerify(t.id) }) { lastActionLabel = "Re-checking…" } }
