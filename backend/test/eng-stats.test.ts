@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildEngStats } from "../src/eng-stats.ts";
-import type { EngTask, TaskArtifacts, TaskBudget } from "../src/domain/eng-task.ts";
+import type { EngTask } from "../src/domain/eng-task.ts";
 import { EMPTY_ARTIFACTS, DEFAULT_BUDGET } from "../src/domain/eng-task.ts";
 
 const NOW = "2026-06-25T00:00:00.000Z";
