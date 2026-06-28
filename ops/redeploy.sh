@@ -7,7 +7,7 @@
 #   command="/opt/loopkeeper/ops/redeploy.sh",no-port-forwarding,no-pty ssh-ed25519 AAAA... deploy
 set -euo pipefail
 
-REPO_DIR="${DEPLOY_REMOTE_PATH:-/opt/loopkeeper}"
+REPO_DIR="${DEPLOY_REMOTE_PATH:-$HOME/loopkeeper}"
 BRANCH="${DEPLOY_BRANCH:-main}"
 
 cd "$REPO_DIR"
