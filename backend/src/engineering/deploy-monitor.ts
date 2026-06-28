@@ -51,7 +51,24 @@ export class DeployMonitor {
       const timedOut = startedTs !== null && Date.parse(now) - Date.parse(startedTs) > this.#timeoutMs;
       if (status === "deploying" && timedOut) status = "failed";
 
-      const note = status === "failed" && timedOut && !run ? "no deploy run found within timeout" : task.artifacts.deploy?.logTail ?? null;
+      const ci = jobConclusion(run, CI_RE);
+      const cd = jobConclusion(run, CD_RE);
+
+      // Classify the failure so the app can offer the RIGHT recovery (fix-forward vs re-run vs rollback),
+      // and fetch the actual build error only for a CI/build failure (so fix-forward can seed the agent).
+      let failureKind: "ci_build" | "cd_infra" | "no_run" | null = null;
+      let ciError: string | null = null;
+      if (status === "failed") {
+        if (!run) failureKind = "no_run";
+        else if (ci !== null && ci !== "success") failureKind = "ci_build";
+        else failureKind = "cd_infra";
+        if (failureKind === "ci_build") {
+          const ciJob = run?.jobs.find((j) => CI_RE.test(j.name));
+          if (ciJob?.id != null) ciError = await this.#github.getRunLog(task.repo, ciJob.id);
+        }
+      }
+
+      const note = status === "failed" && timedOut && !run ? "no deploy run found within timeout" : status === "deploying" ? null : task.artifacts.deploy?.logTail ?? null;
       this.#engStore.setDeployArtifact(
         task.id,
         {
@@ -61,8 +78,10 @@ export class DeployMonitor {
           finishedTs: status === "deploying" ? null : now,
           commitSha: sha,
           runUrl: run?.htmlUrl ?? task.artifacts.deploy?.runUrl ?? null,
-          ci: jobConclusion(run, CI_RE),
-          cd: jobConclusion(run, CD_RE),
+          ci,
+          cd,
+          failureKind, // null while deploying (reset each cycle)
+          ciError, // null while deploying / non-ci failures
           logTail: note,
         },
         now,

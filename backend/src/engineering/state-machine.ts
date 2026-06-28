@@ -40,7 +40,7 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
   "merge:merging": ["merge:merged"],
   "merge:merged": ["deploy:deploying"],
   "deploy:deploying": ["deploy:deployed", "deploy:failed"],
-  "deploy:failed": ["deploy:deploying" /* retry; route also asserts a recorded merge gate */, "rollback:ready" /* undo a bad deploy */],
+  "deploy:failed": ["deploy:deploying" /* cd_infra re-run; route asserts a recorded merge gate */, "dev:in_progress" /* ci_build fix-forward loop */, "rollback:ready" /* undo a bad deploy */],
   "deploy:deployed": ["verify:in_progress" /* post-deploy smoke + sign-off */],
   "verify:in_progress": ["verify:awaiting_review", "verify:failed"],
   "verify:awaiting_review": ["verify:verified" /* GATE 4 */, "rollback:ready"],
@@ -220,4 +220,9 @@ export function shouldRetryAfterTestFailure(b: BudgetView): boolean {
 /** After review comments, may we spend another address/re-review round? */
 export function shouldRetryReview(b: BudgetView): boolean {
   return b.reviewRoundsUsed < b.maxReviewRounds && b.usdCentsUsed < b.maxUsdCents;
+}
+
+/** Entering the post-deploy build-fix loop spends a dev iteration — same pool as the test-fix loop. */
+export function shouldRetryAfterBuildFailure(b: BudgetView): boolean {
+  return shouldRetryAfterTestFailure(b);
 }

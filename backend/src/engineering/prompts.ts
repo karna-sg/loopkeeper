@@ -28,12 +28,23 @@ export function renderDevPrompt(task: EngTask): string {
   ].join("\n");
 }
 
-export function renderFixPrompt(testSummary: string): string {
+export function renderFixPrompt(summary: string): string {
   return [
-    `The unit tests are failing. Fix the code so all tests pass — do not delete or skip tests to make them pass.`,
+    `The verification checks (typecheck, lint, and unit tests) are failing. Fix the code so they all pass — do not delete or skip tests/checks to make them pass.`,
     ``,
-    `Test output:`,
-    testSummary,
+    `Output:`,
+    summary,
+  ].join("\n");
+}
+
+/** Post-merge CI/build failure (fix-forward): the change merged but main is red. */
+export function renderBuildFixPrompt(ciError: string): string {
+  return [
+    `The change was merged but CI on main FAILED. Fix the code so 'pnpm -r typecheck', 'pnpm -r lint', and 'pnpm -r test' all pass, then summarize the fix.`,
+    `A common cause: a port/interface method was added without updating its test doubles/fakes, or a shared type changed. Check that any new interface members are implemented everywhere (including test fakes).`,
+    ``,
+    `CI error:`,
+    ciError || "(no error captured — run the checks locally and fix whatever fails)",
   ].join("\n");
 }
 

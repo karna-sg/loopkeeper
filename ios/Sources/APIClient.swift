@@ -114,6 +114,7 @@ struct APIClient {
     func confirmVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/confirm") }
     func retryVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/retry") }
     func rollback(_ id: String) async throws { try await act("/tasks/\(id)/rollback") }
+    func fixBuild(_ id: String) async throws { try await act("/tasks/\(id)/fix-build") }
 
     // MARK: - transport
 

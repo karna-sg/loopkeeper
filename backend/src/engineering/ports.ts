@@ -102,8 +102,10 @@ export interface DeployRun {
   /** Set once completed: `success` | `failure` | `cancelled` | `timed_out` | `skipped` | `null`. */
   conclusion: string | null;
   htmlUrl: string | null;
-  /** Per-job status — typically the `verify` (CI) and `deploy` (CD) jobs of the run. */
-  jobs: { name: string; status: string; conclusion: string | null }[];
+  /** Numeric run id (for re-running a transient deploy). */
+  id: number | null;
+  /** Per-job status — typically the `verify` (CI) and `deploy` (CD) jobs. `id` is for log fetch. */
+  jobs: { id: number | null; name: string; status: string; conclusion: string | null }[];
 }
 
 /** GitHub REST operations (backend-initiated: create / poll / merge / observe CD). Reconcile-before-act. */
@@ -137,6 +139,10 @@ export interface GithubPort {
   getDeployRun(repo: string, sha: string): Promise<DeployRun | null>;
   /** Parsed per-file diff hunks. Uses PR files endpoint if prNumber given, else compare {base}...{head}. */
   getDiff(repo: string, args: { prNumber?: number; base?: string; head?: string }): Promise<DiffFile[]>;
+  /** Tail of a workflow job's log (the build error). `null` if unavailable. */
+  getRunLog(repo: string, jobId: number): Promise<string | null>;
+  /** Re-run the failed jobs of a workflow run (transient CD failure recovery). */
+  rerunDeploy(repo: string, runId: number): Promise<void>;
 }
 
 export interface DeployOutcome {

@@ -1,6 +1,7 @@
 import type { DeployRun, DiffFile, DiffHunk, DiffLine, GithubPort, PrState, PullRequest } from "../ports.ts";
 import type { ReviewComment } from "../../domain/eng-task.ts";
 import { redactSecrets } from "../../redact.ts";
+import { stripAnsi } from "./vitest-tester.ts";
 
 /**
  * GitHub REST adapter (the live impl of GithubPort; the port itself is the test seam). Uses the
@@ -104,12 +105,30 @@ export class RestGithubClient implements GithubPort {
     if (!run) return null;
     let jobs: DeployRun["jobs"] = [];
     try {
-      const j = (await this.#get(`/repos/${repo}/actions/runs/${run.id}/jobs`)) as { jobs?: Array<{ name: string; status: string; conclusion: string | null }> };
-      jobs = (j.jobs ?? []).map((x) => ({ name: x.name, status: x.status, conclusion: x.conclusion }));
+      const j = (await this.#get(`/repos/${repo}/actions/runs/${run.id}/jobs`)) as { jobs?: Array<{ id: number; name: string; status: string; conclusion: string | null }> };
+      jobs = (j.jobs ?? []).map((x) => ({ id: x.id, name: x.name, status: x.status, conclusion: x.conclusion }));
     } catch {
       // jobs breakdown is best-effort; the run status/conclusion is what drives the stage.
     }
-    return { status: run.status, conclusion: run.conclusion, htmlUrl: run.html_url, jobs };
+    return { status: run.status, conclusion: run.conclusion, htmlUrl: run.html_url, id: run.id, jobs };
+  }
+
+  async getRunLog(repo: string, jobId: number): Promise<string | null> {
+    // Per-job logs endpoint 302s to a signed plain-text blob (undici follows it, dropping our auth on
+    // the cross-origin hop — the signed URL self-authenticates). Strip ANSI, redact, tail.
+    try {
+      const res = await fetch(`${this.#api}/repos/${repo}/actions/jobs/${jobId}/logs`, { headers: this.#headers() });
+      if (!res.ok) return null;
+      const text = stripAnsi(await res.text());
+      return redactSecrets(text.slice(-1600));
+    } catch {
+      return null;
+    }
+  }
+
+  async rerunDeploy(repo: string, runId: number): Promise<void> {
+    const { status, json } = await this.#send("POST", `/repos/${repo}/actions/runs/${runId}/rerun-failed-jobs`, {});
+    if (status >= 300) throw new Error(`GitHub rerun failed (${status}): ${JSON.stringify(json).slice(0, 150)}`);
   }
 }
 

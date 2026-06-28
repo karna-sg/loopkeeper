@@ -8,6 +8,7 @@ import {
   isTerminal,
   needsHuman,
   nextStatuses,
+  shouldRetryAfterBuildFailure,
   shouldRetryAfterTestFailure,
   shouldRetryReview,
   transitionNeedsGate,
@@ -197,5 +198,22 @@ describe("state-machine: verify + rollback stages", () => {
   it("verify:awaiting_review and rollback:ready need a human", () => {
     expect(needsHuman(ss("verify", "awaiting_review"))).toBe(true);
     expect(needsHuman(ss("rollback", "ready"))).toBe(true);
+  });
+});
+
+describe("state-machine: deploy-failure recovery", () => {
+  it("deploy:failed offers fix-forward (dev), re-run (deploying), and rollback", () => {
+    const next = nextStatuses(ss("deploy", "failed"));
+    expect(next).toContain("dev:in_progress");
+    expect(next).toContain("deploy:deploying");
+    expect(next).toContain("rollback:ready");
+  });
+  it("a user can fix-forward from deploy:failed back to dev", () => {
+    expect(canTransition(ss("deploy", "failed"), ss("dev", "in_progress"), "user").ok).toBe(true);
+  });
+  it("shouldRetryAfterBuildFailure follows the dev iteration budget", () => {
+    const view = { maxIterations: 6, maxUsdCents: 500, usdCentsUsed: 100, maxReviewRounds: 5, reviewRoundsUsed: 0 };
+    expect(shouldRetryAfterBuildFailure({ ...view, iterationsUsed: 2 })).toBe(true);
+    expect(shouldRetryAfterBuildFailure({ ...view, iterationsUsed: 6 })).toBe(false);
   });
 });

@@ -74,6 +74,10 @@ struct DeployArtifact: Codable, Hashable {
     let ci: String?
     /// CD (deploy) job conclusion.
     let cd: String?
+    /// Why a deploy failed: "ci_build" (code/build broken → fix-forward), "cd_infra" (transient → retry), "no_run".
+    let failureKind: String?
+    /// Redacted tail of the failing CI job's log — the actual build error.
+    let ciError: String?
 }
 
 struct VerifyCheck: Codable, Hashable {

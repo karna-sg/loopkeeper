@@ -3,7 +3,7 @@ import type { EngStore, TransitionArgs, TransitionOutcome } from "../store/eng-s
 import type { EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
 import { effectsFor, shouldRetryAfterTestFailure } from "./state-machine.ts";
 import { redactSecrets } from "../redact.ts";
-import { renderAddressCommentsPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt } from "./prompts.ts";
+import { renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt } from "./prompts.ts";
 import type { AgentRunner, DeployerPort, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
 
 export interface OrchestratorDeps {
@@ -62,7 +62,7 @@ export class Orchestrator {
       case "plan":
         return this.#handlePlan(job.taskId);
       case "dev_test":
-        return this.#handleDevTest(job.taskId);
+        return this.#handleDevTest(job.taskId, this.#seedFix(job));
       case "create_pr":
         return this.#handleCreatePr(job.taskId);
       case "address_comments":
@@ -115,6 +115,17 @@ export class Orchestrator {
     }
   }
 
+  /** dev_test enqueued from a post-deploy CI/build failure carries `{ seedFix: true }` so the loop's
+   *  first iteration is a BUILD-FIX (seeded with the CI error), not a re-implementation. */
+  #seedFix(job: EngJob): boolean {
+    if (!job.payload) return false;
+    try {
+      return (JSON.parse(job.payload) as { seedFix?: boolean }).seedFix === true;
+    } catch {
+      return false;
+    }
+  }
+
   async #handlePlan(taskId: string): Promise<void> {
     const { engStore, agentRunner, workspace, now } = this.#d;
     let task = this.#require(taskId);
@@ -151,7 +162,7 @@ export class Orchestrator {
     this.#advance(taskId, { stage: "plan", status: "completed_unapproved" });
   }
 
-  async #handleDevTest(taskId: string): Promise<void> {
+  async #handleDevTest(taskId: string, seedFix = false): Promise<void> {
     const { engStore, agentRunner, workspace, tester, now } = this.#d;
     const base = this.#require(taskId);
     const ws = await workspace.ensure(base);
@@ -159,13 +170,17 @@ export class Orchestrator {
     let sessionId = base.claudeSessionId ?? randomUUID();
     if (!base.claudeSessionId) engStore.setClaudeSession(taskId, sessionId, now());
 
-    let lastTestSummary = "";
-    let first = true;
+    // Entered from a post-deploy CI/build failure (fix-forward): iteration 1 is a build-fix seeded
+    // with the CI error, not a re-implementation. Later iterations fall back to the normal fix prompt.
+    let lastTestSummary = seedFix ? base.artifacts.deploy?.ciError ?? "CI/build failed on main." : "";
+    let first = !seedFix;
+    let buildSeed = seedFix;
     for (;;) {
       this.#advance(taskId, { stage: "dev", status: "in_progress" });
       const budget = engStore.addBudgetUsage(taskId, { iterations: 1 }, now());
       const task = this.#require(taskId);
-      const prompt = first ? renderDevPrompt(task) : renderFixPrompt(lastTestSummary);
+      const prompt = first ? renderDevPrompt(task) : buildSeed ? renderBuildFixPrompt(lastTestSummary) : renderFixPrompt(lastTestSummary);
+      buildSeed = false;
       const runId = engStore.startAgentRun({ taskId, stage: "dev", sessionId, iteration: budget?.iterationsUsed ?? 0, startedTs: now() });
       const run = await agentRunner.run({ taskId, stage: "dev", sessionId, worktreePath: ws.path, mode: "execute", resume: true, prompt, coldStartPrompt: renderColdStartPrompt(task, branchLog), onCancelRegistered: this.#onCancelRegistered(taskId) });
       this.#d.cancelRegistry?.delete(taskId);
@@ -317,7 +332,7 @@ export class Orchestrator {
       this.#advance(taskId, { stage: "deploy", status: "deploying" });
       engStore.setDeployArtifact(
         taskId,
-        { env: deployEnv, status: "deploying", startedTs: now(), finishedTs: null, commitSha: sha, runUrl: null, ci: null, cd: null, logTail: "waiting for GitHub Actions deploy run" },
+        { env: deployEnv, status: "deploying", startedTs: now(), finishedTs: null, commitSha: sha, runUrl: null, ci: null, cd: null, failureKind: null, ciError: null, logTail: "waiting for GitHub Actions deploy run" },
         now(),
       );
       return;
@@ -329,7 +344,7 @@ export class Orchestrator {
     const out = await deployer.redeploy();
     engStore.setDeployArtifact(
       taskId,
-      { env: deployEnv, status: out.ok ? "deployed" : "failed", startedTs: now(), finishedTs: now(), commitSha: out.sha, runUrl: null, ci: null, cd: null, logTail: out.logTail ? redactSecrets(out.logTail) : null },
+      { env: deployEnv, status: out.ok ? "deployed" : "failed", startedTs: now(), finishedTs: now(), commitSha: out.sha, runUrl: null, ci: null, cd: null, failureKind: out.ok ? null : "cd_infra", ciError: null, logTail: out.logTail ? redactSecrets(out.logTail) : null },
       now(),
     );
     this.#advance(taskId, { stage: "deploy", status: out.ok ? "deployed" : "failed" });

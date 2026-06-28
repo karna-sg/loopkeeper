@@ -307,6 +307,7 @@ final class AppModel {
     func confirmVerify(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.confirmVerify(t.id) }) { lastActionLabel = "Verified" } }
     func retryVerify(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.retryVerify(t.id) }) { lastActionLabel = "Re-checking…" } }
     func rollback(_ t: EngTask) async { Haptics.warning(); if await mutateTasks({ try await api.rollback(t.id) }) { lastActionLabel = "Rolling back…" } }
+    func fixBuild(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.fixBuild(t.id) }) { lastActionLabel = "Fixing build…" } }
 
     private func upsertTask(_ t: EngTask) {
         if let i = engineeringTasks.firstIndex(where: { $0.id == t.id }) { engineeringTasks[i] = t } else { engineeringTasks.append(t) }

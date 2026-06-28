@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { AppDeps } from "../deps.ts";
 import type { EngTask, Status } from "../../domain/eng-task.ts";
 import { applyTransition } from "../../engineering/orchestrator.ts";
-import { isTerminal } from "../../engineering/state-machine.ts";
+import { isTerminal, shouldRetryAfterBuildFailure } from "../../engineering/state-machine.ts";
+import { RestGithubClient } from "../../engineering/adapters/rest-github.ts";
 
 /** Live = a stage is executing; the status endpoint reports running vs stalled vs idle. */
 const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>(["in_progress", "creating", "merging", "deploying"]);
@@ -298,6 +299,32 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     return { started: true };
   });
 
+  // --- Fix-forward: a post-deploy CI/build failure is a CODE problem — send it back to the agent
+  //     (re-enters the dev→test→pr→merge→deploy loop seeded with the CI error), not a blind CI re-run. ---
+
+  app.post("/tasks/:id/fix-build", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    if (!(task.stage === "deploy" && task.status === "failed" && task.artifacts.deploy?.failureKind === "ci_build")) {
+      return reply.code(409).send({ error: "no CI/build failure to fix" });
+    }
+    const now = deps.now();
+    const body = (req.body ?? {}) as { maxIterations?: number; maxUsdCents?: number };
+    engStore.raiseBudget(id, body, now); // let the user top up before re-entering the agent loop
+    const fresh = engStore.get(id);
+    if (fresh && !shouldRetryAfterBuildFailure(fresh.budget)) {
+      return reply.code(409).send({ error: "budget exhausted — raise maxIterations/maxUsdCents to fix the build" });
+    }
+    // Back to dev (ungated); the PR + merge gates are re-crossed on the way out (human-in-the-loop kept).
+    const r = applyTransition(engStore, { taskId: id, to: { stage: "dev", status: "in_progress" }, actor: "user", ...detail(), ts: now }, now);
+    if (!r.ok) return reply.code(409).send({ error: r.reason ?? "cannot start build fix" });
+    engStore.enqueue({ taskId: id, kind: "dev_test", payload: { seedFix: true }, dedupeKey: `${id}:dev_test` }, now);
+    return { started: true };
+  });
+
   // --- Retry: raise budget + resume, or re-run a failed deploy (decision #6) ---
 
   app.post("/tasks/:id/retry", async (req, reply) => {
@@ -325,6 +352,21 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     if (task.stage === "deploy" && task.status === "failed") {
       // Prod-mutating: only allowed if this task actually crossed the merge gate (audit invariant).
       if (!engStore.hasGatedMerge(id)) return reply.code(403).send({ error: "deploy retry requires a recorded merge approval" });
+      // A build failure can't be fixed by re-running CI — point the user at fix-forward.
+      if (task.artifacts.deploy?.failureKind === "ci_build") {
+        return reply.code(409).send({ error: "this is a build failure — use POST /tasks/:id/fix-build (a CI re-run won't fix it)" });
+      }
+      // Transient CD/infra failure: actually RE-RUN the workflow's failed jobs (re-observing the same
+      // run alone would just see the old failure), then re-observe.
+      const runUrl = task.artifacts.deploy?.runUrl ?? "";
+      const runIdMatch = runUrl.match(/\/runs\/(\d+)/);
+      if (task.artifacts.deploy?.failureKind === "cd_infra" && config.github && config.githubToken && runIdMatch) {
+        try {
+          await new RestGithubClient(config.githubToken).rerunDeploy(config.github.repo, Number(runIdMatch[1]));
+        } catch {
+          // best-effort: re-observe anyway
+        }
+      }
       const enqueued = engStore.enqueue({ taskId: id, kind: "deploy", dedupeKey: `${id}:deploy` }, now);
       if (!enqueued) return reply.code(409).send({ error: "deploy already in progress" });
       return { started: true };
