@@ -21,6 +21,7 @@ struct TaskWorkspaceView: View {
     @State private var inFlight = false
     @State private var pollTask: Task<Void, Never>?
     @State private var requirementsExpanded = true
+    @State private var diffExpanded = false
 
     // Terminal-clean type scale. One face (monospaced), hierarchy via weight + dim.
     private let mono = Font.system(size: 13, design: .monospaced)
@@ -242,6 +243,7 @@ struct TaskWorkspaceView: View {
                 Text(diff).font(monoSmall).foregroundStyle(.tertiary).textSelection(.enabled)
             }
         }
+        diffExpander(task)
         actionButton("approve & open PR", .green) { await model.approvePR(task); await reload() }
         Text("This opens a public PR on GitHub.").font(monoSmall).foregroundStyle(.secondary)
     }
@@ -250,6 +252,7 @@ struct TaskWorkspaceView: View {
         if let pr = task.artifacts?.pr, let url = pr.url, let u = URL(string: url) {
             linkButton("review PR #\(pr.number ?? 0)") { openURL(u) }
         }
+        diffExpander(task)
         actionButton("approve review — ready to merge", .green) { await model.approveReview(task); await reload() }
         Text("Review the PR on GitHub, then approve here to advance to the merge gate.")
             .font(monoSmall).foregroundStyle(.secondary)
@@ -259,9 +262,22 @@ struct TaskWorkspaceView: View {
         if let pr = task.artifacts?.pr, let url = pr.url, let u = URL(string: url) {
             linkButton("review PR #\(pr.number ?? 0)") { openURL(u) }
         }
+        diffExpander(task)
         actionButton("approve merge", .green) { await model.approveMerge(task); await reload() }
         Text("Merging triggers the prod redeploy. This cannot be undone from the app.")
             .font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func diffExpander(_ task: EngTask) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            textButton(diffExpanded ? "[ hide diff ]" : "[ show diff ]", .secondary) {
+                diffExpanded.toggle()
+            }
+            if diffExpanded {
+                DiffView(taskId: task.id, fallbackURL: task.artifacts?.pr?.url.flatMap(URL.init))
+                    .padding(.top, 4)
+            }
+        }
     }
 
     @ViewBuilder private func verifyGate(_ task: EngTask) -> some View {
