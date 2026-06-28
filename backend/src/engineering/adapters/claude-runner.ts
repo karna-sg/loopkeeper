@@ -59,7 +59,8 @@ export class ClaudeAgentRunner implements AgentRunner {
     if (resume) argv.push("--resume", args.sessionId);
     else argv.push("--session-id", args.sessionId);
     argv.push("--permission-mode", args.mode === "plan" ? "plan" : "acceptEdits");
-    if (this.#cfg.model) argv.push("--model", this.#cfg.model);
+    const model = args.model ?? this.#cfg.model;
+    if (model) argv.push("--model", model);
     argv.push(args.prompt);
 
     // Minimal env (blast-radius control). HOME lets `claude` find ~/.claude subscription creds.

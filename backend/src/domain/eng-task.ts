@@ -303,6 +303,8 @@ export interface EngTask {
   worktreePath: string | null;
   /** Claude Code session id (FR-14); dev/review `--resume` it, cold-start from the plan if gone. */
   claudeSessionId: string | null;
+  /** Per-task model override (e.g. "claude-opus-4-8"). Null → use the global ENG_CLAUDE_MODEL default. */
+  claudeModel: string | null;
 
   /** Current position in the machine. */
   stage: Stage;

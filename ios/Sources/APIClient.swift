@@ -118,6 +118,12 @@ struct APIClient {
     func retryVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/retry") }
     func rollback(_ id: String) async throws { try await act("/tasks/\(id)/rollback") }
     func fixBuild(_ id: String) async throws { try await act("/tasks/\(id)/fix-build") }
+    func setModel(_ id: String, model: String?) async throws {
+        var req = makeRequest("/tasks/\(id)", method: "PATCH", json: true)
+        let modelValue: Any = model.map { $0 as Any } ?? NSNull()
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["claudeModel": modelValue])
+        _ = try await run(req)
+    }
 
     // MARK: - transport
 

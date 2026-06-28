@@ -64,6 +64,7 @@ interface TaskRow {
   branch: string | null;
   worktree_path: string | null;
   claude_session_id: string | null;
+  claude_model: string | null;
   stage: string;
   status: string;
   artifacts: string;
@@ -106,6 +107,7 @@ function toTask(r: TaskRow): EngTask {
     branch: r.branch,
     worktreePath: r.worktree_path,
     claudeSessionId: r.claude_session_id,
+    claudeModel: r.claude_model,
     stage: r.stage as Stage,
     status: r.status as Status,
     artifacts: { ...EMPTY_ARTIFACTS, ...parseJson<Partial<TaskArtifacts>>(r.artifacts, {}) },
@@ -257,6 +259,7 @@ export class EngStore {
         branch TEXT,
         worktree_path TEXT,
         claude_session_id TEXT,
+        claude_model TEXT,
         stage TEXT NOT NULL DEFAULT 'plan',
         status TEXT NOT NULL DEFAULT 'not_started',
         artifacts TEXT NOT NULL DEFAULT '{}',
@@ -327,6 +330,7 @@ export class EngStore {
     // Post-deploy column additions go here (try/catch ALTER), same no-migration convention as LoopsStore.
     for (const ddl of [
       "ALTER TABLE eng_tasks ADD COLUMN cancel_pending INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE eng_tasks ADD COLUMN claude_model TEXT",
     ] as string[]) {
       try {
         this.#db.exec(ddl);
@@ -504,6 +508,10 @@ export class EngStore {
   setProgress(id: string, opts: { lastError?: string | null }, nowIso: string): boolean {
     if (opts.lastError === undefined) return false;
     return this.#db.prepare("UPDATE eng_tasks SET last_error = ?, updated_ts = ? WHERE id = ?").run(opts.lastError, nowIso, id).changes > 0;
+  }
+
+  setModel(id: string, model: string | null, nowIso: string): boolean {
+    return this.#db.prepare("UPDATE eng_tasks SET claude_model = ?, updated_ts = ? WHERE id = ?").run(model, nowIso, id).changes > 0;
   }
 
   setLastNotified(id: string, statusKeyValue: string): boolean {

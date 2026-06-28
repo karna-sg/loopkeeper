@@ -141,6 +141,7 @@ struct EngTask: Codable, Identifiable, Hashable {
     let status: String
     let artifacts: TaskArtifacts?
     let budget: TaskBudget?
+    let claudeModel: String?
     let lastError: String?
     let updatedTs: String?
 

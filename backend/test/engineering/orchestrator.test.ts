@@ -477,3 +477,57 @@ describe("orchestrator: build fix-forward (seedFix)", () => {
     expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" }); // local verify passed → re-proposes
   });
 });
+
+describe("orchestrator: per-task model selection (LP-27)", () => {
+  it("passes null model to the runner when no per-task override is set", async () => {
+    const runner = new FakeAgentRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+
+    const planCall = runner.calls.find((c) => c.stage === "plan");
+    expect(planCall?.model).toBeNull();
+  });
+
+  it("passes the per-task claudeModel to the runner for all agent stages", async () => {
+    const runner = new FakeAgentRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+    engStore.setModel(id, "claude-opus-4-8", NOW);
+
+    // plan stage
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+    const planCall = runner.calls.find((c) => c.stage === "plan");
+    expect(planCall?.model).toBe("claude-opus-4-8");
+
+    // dev stage
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+    await drain(worker);
+    const devCall = runner.calls.find((c) => c.stage === "dev");
+    expect(devCall?.model).toBe("claude-opus-4-8");
+  });
+
+  it("picks up a model change between plan and dev runs", async () => {
+    const runner = new FakeAgentRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+
+    // Plan with sonnet
+    engStore.setModel(id, "claude-sonnet-4-6", NOW);
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+    expect(runner.calls.find((c) => c.stage === "plan")?.model).toBe("claude-sonnet-4-6");
+
+    // Switch to opus before approving — dev should pick it up
+    engStore.setModel(id, "claude-opus-4-8", NOW);
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+    await drain(worker);
+    expect(runner.calls.find((c) => c.stage === "dev")?.model).toBe("claude-opus-4-8");
+  });
+});
