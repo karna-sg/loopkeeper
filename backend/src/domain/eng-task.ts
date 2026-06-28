@@ -276,11 +276,11 @@ export const DEFAULT_BUDGET: TaskBudget = {
 
 /** A persisted engineering task. */
 export interface EngTask {
-  /** Internal id `task_<sha(jiraKey)>` — the id used in every `/tasks/:id` route and push payload. */
+  /** Internal id `task_<sha(jiraId)>` — stable across key renames; used in every `/tasks/:id` route and push payload. */
   id: string;
-  /** Jira issue key, e.g. "LK-123" (UNIQUE; idempotency key for import). */
+  /** Jira issue key, e.g. "LK-123" — display-only; updated on project rename, not used for identity. */
   jiraKey: string;
-  /** Numeric Jira id (kept for completeness; v1 does not write back). */
+  /** Immutable numeric Jira id — the stable identity key for this task row. */
   jiraId: string;
   jiraUrl: string;
   /** Cached Jira metadata (refreshed by sync / live fetch; Jira is the source of truth). */
@@ -395,9 +395,9 @@ export interface AgentRun {
   logPath: string | null;
 }
 
-/** Deterministic task id derived from the Jira key — same key → same id (idempotent import). */
-export function taskId(jiraKey: string): string {
-  return `task_${createHash("sha256").update(jiraKey.toUpperCase()).digest("hex").slice(0, 20)}`;
+/** Deterministic task id derived from the immutable Jira numeric id — same issue → same id across key renames. */
+export function taskId(jiraId: string): string {
+  return `task_${createHash("sha256").update(jiraId).digest("hex").slice(0, 20)}`;
 }
 
 /** The internal composite key the state machine reasons over. Never serialized. */

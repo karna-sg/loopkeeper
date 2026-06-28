@@ -32,7 +32,7 @@ describe("EngStore: import", () => {
   it("inserts at plan:not_started, then upserts metadata idempotently", () => {
     expect(store.upsertFromJira([input()], NOW)).toEqual({ inserted: 1, updated: 0 });
     const t = store.getByKey("LK-1")!;
-    expect(t.id).toBe(taskId("LK-1"));
+    expect(t.id).toBe(taskId("10001")); // id derives from jiraId, not jiraKey
     expect(t.stage).toBe("plan");
     expect(t.status).toBe("not_started");
 
@@ -46,6 +46,60 @@ describe("EngStore: import", () => {
     expect(after.stage).toBe("plan");
     expect(after.status).toBe("in_progress"); // LK stage NEVER regressed by import
   });
+
+  it("key rename: same jira_id + new jira_key updates key and preserves pipeline state", () => {
+    store.upsertFromJira([input({ jiraKey: "LK-1", jiraId: "10001" })], NOW);
+    const idBefore = store.getByKey("LK-1")!.id;
+    store.transition({ taskId: idBefore, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+
+    // Same issue, new project key after rename (jiraId unchanged).
+    store.upsertFromJira([input({ jiraKey: "LP-1", jiraId: "10001" })], NOW);
+
+    expect(store.count()).toBe(1); // no duplicate row
+    const after = store.get(idBefore)!;
+    expect(after.jiraKey).toBe("LP-1"); // display key updated
+    expect(after.status).toBe("in_progress"); // pipeline state preserved
+    expect(store.getByKey("LP-1")).not.toBeNull();
+  });
+
+  it("reconcile: prunes not_started stale rows, flags in-flight ones, skips terminal", () => {
+    store.upsertFromJira(
+      [
+        input({ jiraKey: "LK-1", jiraId: "10001" }), // will be pruned
+        input({ jiraKey: "LK-2", jiraId: "10002" }), // will be flagged
+        input({ jiraKey: "LK-3", jiraId: "10003" }), // still live
+        input({ jiraKey: "LK-4", jiraId: "10004" }), // terminal — silently skipped
+      ],
+      NOW,
+    );
+    const id2 = taskId("10002");
+    const id4 = taskId("10004");
+    store.transition({ taskId: id2, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    // Drive LK-4 to a terminal state
+    store.transition({ taskId: id4, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    store.transition({ taskId: id4, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+
+    const result = store.reconcile(new Set(["10003"]), NOW);
+    expect(result.pruned).toBe(1); // LK-1 deleted
+    expect(result.flagged).toBe(1); // LK-2 warned
+    expect(store.count()).toBe(3); // LK-1 gone; LK-2, LK-3, LK-4 remain
+    expect(store.getByKey("LK-1")).toBeNull();
+    expect(store.get(id2)?.lastError).toContain("no longer assigned");
+    expect(store.getByKey("LK-3")).not.toBeNull();
+    expect(store.getByKey("LK-4")).not.toBeNull(); // terminal row kept, no flag
+    expect(store.get(id4)?.lastError).toBeNull();
+  });
+
+  it("reconcile: cascades deletes for pruned rows to child tables", () => {
+    store.upsertFromJira([input({ jiraKey: "LK-1", jiraId: "10001" })], NOW);
+    const t = taskId("10001");
+    store.enqueue({ taskId: t, kind: "plan", dedupeKey: `${t}:plan` }, NOW);
+
+    store.reconcile(new Set<string>(), NOW);
+
+    expect(store.getByKey("LK-1")).toBeNull();
+    expect(store.runningJobForTask(t)).toBeNull();
+  });
 });
 
 describe("EngStore: transitions + audit", () => {
@@ -54,7 +108,7 @@ describe("EngStore: transitions + audit", () => {
   beforeEach(() => {
     store = new EngStore(":memory:");
     store.upsertFromJira([input()], NOW);
-    id = taskId("LK-1");
+    id = taskId("10001");
   });
 
   it("idempotent no-op leaves no event", () => {
@@ -66,7 +120,7 @@ describe("EngStore: transitions + audit", () => {
   it("rejects an illegal transition", () => {
     const r = store.transition({ taskId: id, to: { stage: "merge", status: "merged" }, actor: "user", gateApproved: true, ts: NOW });
     expect(r.ok).toBe(false);
-    expect(store.getByKey("LK-1")!.status).toBe("not_started");
+    expect(store.get(id)!.status).toBe("not_started");
   });
 
   it("enforces the plan gate: needs user + gateApproved, and records it", () => {
@@ -123,7 +177,7 @@ describe("EngStore: artifacts + budget", () => {
   beforeEach(() => {
     store = new EngStore(":memory:");
     store.upsertFromJira([input()], NOW);
-    id = taskId("LK-1");
+    id = taskId("10001");
   });
 
   it("merge-patches artifacts without clobbering other stages", () => {
@@ -153,7 +207,7 @@ describe("EngStore: job queue", () => {
   });
 
   it("enqueues, dedupes live jobs, and claims atomically", () => {
-    const t = taskId("LK-1");
+    const t = taskId("10001");
     const j1 = store.enqueue({ taskId: t, kind: "plan", dedupeKey: `${t}:plan` }, NOW);
     expect(j1).not.toBeNull();
     // a second live job with the same dedupe key is blocked
@@ -172,7 +226,7 @@ describe("EngStore: job queue", () => {
   });
 
   it("requeues a failed job with attempts left, fails it when exhausted", () => {
-    const t = taskId("LK-1");
+    const t = taskId("10001");
     const j = store.enqueue({ taskId: t, kind: "dev_test", maxAttempts: 2 }, NOW)!;
     const c = store.claimNext("w", NOW, "2026-06-27T01:00:00Z")!;
     expect(store.failJob(c.id, "boom", NOW, { requeueAt: NOW })).toBe(true);
@@ -185,7 +239,7 @@ describe("EngStore: job queue", () => {
   });
 
   it("reaps expired leases back to the queue", () => {
-    const t = taskId("LK-1");
+    const t = taskId("10001");
     store.enqueue({ taskId: t, kind: "merge", maxAttempts: 3 }, NOW);
     store.claimNext("w", NOW, "2026-06-27T00:00:01Z"); // lease ends almost immediately
     const reaped = store.reapExpiredLeases("2026-06-27T01:00:00Z");
@@ -200,7 +254,7 @@ describe("EngStore: agent runs", () => {
   beforeEach(() => {
     store = new EngStore(":memory:");
     store.upsertFromJira([input()], NOW);
-    id = taskId("LK-1");
+    id = taskId("10001");
   });
 
   it("records a run and reconciles crashed runs on restart", () => {
@@ -220,7 +274,7 @@ describe("EngStore: cancel pending", () => {
   beforeEach(() => {
     store = new EngStore(":memory:");
     store.upsertFromJira([input()], NOW);
-    id = taskId("LK-1");
+    id = taskId("10001");
   });
 
   it("cancel_pending defaults to false and toggles via set/is", () => {

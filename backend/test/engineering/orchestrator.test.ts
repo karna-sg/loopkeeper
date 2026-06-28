@@ -133,7 +133,7 @@ describe("orchestrator: full happy-path lifecycle through the worker", () => {
   it("drives plan → deploy with the three human gates", async () => {
     const { engStore, worker } = harness();
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     // Prepare Plan (user, not a gate) → enqueues the plan job.
     applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
@@ -200,7 +200,7 @@ describe("orchestrator: budget escalation", () => {
     const runner = new FakeAgentRunner();
     const { engStore, worker } = harness({ tester: new FakeTester(false), runner });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     engStore.raiseBudget(id, { maxIterations: 2 }, NOW);
 
     applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
@@ -220,7 +220,7 @@ describe("orchestrator: budget escalation", () => {
   it("a user can raise the budget and retry from blocked", async () => {
     const { engStore, worker } = harness({ tester: new FakeTester(false) });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     engStore.raiseBudget(id, { maxIterations: 1 }, NOW);
     applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
     await drain(worker);
@@ -245,7 +245,7 @@ describe("worker: cancel-watcher integration", () => {
     // The fake runner succeeds but the task is already blocked — escalate must NOT overwrite it.
     const { engStore, worker } = harness();
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     // Drive to plan:in_progress and enqueue a plan job.
     applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
@@ -269,7 +269,7 @@ describe("worker: cancel-watcher integration", () => {
     const timeline: string[] = [];
     const engStore = new EngStore(":memory:");
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     // Fake runner that checks the registry is populated during the run (before cleanup).
     class CapturingRunner {
@@ -312,7 +312,7 @@ describe("orchestrator: deploy disabled is a no-op", () => {
   it("leaves the task at merged when deploy is disabled", async () => {
     const { engStore, worker } = harness({ deployEnabled: false });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     // Jump to merge:merging via the documented path is long; seed straight to merging for this unit.
     engStore.upsertFromJira([input()], NOW);
     // Walk minimal path to merge:merging.
@@ -348,7 +348,7 @@ describe("orchestrator: github-actions deploy mode observes (no SSH)", () => {
   it("advances to deploy:deploying and records the merge sha; the run is finalized by the monitor", async () => {
     const { engStore, worker } = harness({ deployMode: "github-actions" });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     const path: Array<{ stage: EngTask["stage"]; status: EngTask["status"]; gate?: boolean; actor: "user" | "system" }> = [
       { stage: "plan", status: "in_progress", actor: "user" },
       { stage: "plan", status: "completed_unapproved", actor: "system" },
@@ -408,7 +408,7 @@ describe("orchestrator: verify + rollback stages", () => {
   it("auto-runs verify after deploy (no verify URL → awaiting manual sign-off)", async () => {
     const { engStore, worker } = harness(); // ssh deploy mode, verifyUrl null
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     seedToMerging(engStore, id);
     await drain(worker);
     expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "awaiting_review" });
@@ -418,7 +418,7 @@ describe("orchestrator: verify + rollback stages", () => {
   it("routes a failed post-deploy smoke to verify:failed", async () => {
     const { engStore, worker } = harness({ verifyUrl: "http://127.0.0.1:1/healthz" }); // refused → smoke fails
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     seedToMerging(engStore, id);
     await drain(worker);
     expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "failed" });
@@ -428,7 +428,7 @@ describe("orchestrator: verify + rollback stages", () => {
   it("rolls back via a revert PR → rolled_back", async () => {
     const { engStore, worker } = harness();
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     seedToMerging(engStore, id);
     await drain(worker);
     expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "awaiting_review" });
@@ -460,7 +460,7 @@ describe("orchestrator: build fix-forward (seedFix)", () => {
     const runner = new FakeAgentRunner();
     const { engStore, worker } = harness({ runner });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     engStore.setArtifact(id, { merge: { commitSha: "mergesha", mergedTs: NOW, mergedBy: null, method: "squash" } }, NOW);
     for (const [stage, status, actor, gate] of PATH_TO_DEPLOY_FAILED) {
       engStore.transition({ taskId: id, to: { stage: stage as never, status: status as never }, actor, gateApproved: gate, ts: NOW });
@@ -483,7 +483,7 @@ describe("orchestrator: per-task model selection (LP-27)", () => {
     const runner = new FakeAgentRunner();
     const { engStore, worker } = harness({ runner });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
     await drain(worker);
@@ -496,7 +496,7 @@ describe("orchestrator: per-task model selection (LP-27)", () => {
     const runner = new FakeAgentRunner();
     const { engStore, worker } = harness({ runner });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
     engStore.setModel(id, "claude-opus-4-8", NOW);
 
     // plan stage
@@ -516,7 +516,7 @@ describe("orchestrator: per-task model selection (LP-27)", () => {
     const runner = new FakeAgentRunner();
     const { engStore, worker } = harness({ runner });
     engStore.upsertFromJira([input()], NOW);
-    const id = taskId("LK-1");
+    const id = taskId("10001");
 
     // Plan with sonnet
     engStore.setModel(id, "claude-sonnet-4-6", NOW);

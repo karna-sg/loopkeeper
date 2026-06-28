@@ -28,7 +28,9 @@ export interface AppDeps {
   buildDraftClient: () => DraftClient;
   /** List the user's Slack conversations for the channel picker; throws if Slack isn't connected. */
   listSlackChannels: () => Promise<SlackChannelInfo[]>;
-  /** Built lazily; throws if Jira isn't connected. Imports assigned issues into eng.db (FR-2). */
+  /** Jira sync singleton — null when Jira isn't connected. Holds the 30s list cache for GET /tasks. */
+  jiraSync: JiraSyncService | null;
+  /** Built lazily; throws if Jira isn't connected. Use for POST /tasks/sync error semantics. */
   buildJiraSync: () => JiraSyncService;
   /** Returns a GitHub client when a token is configured, null otherwise. */
   buildGithub: () => GithubPort | null;
