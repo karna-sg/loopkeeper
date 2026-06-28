@@ -178,7 +178,7 @@ function buildProdNudgeService(config: ServerConfig, store: LoopsStore): NudgeSe
  * connectors aren't configured yet — the scheduler isolates and logs that, so the server keeps
  * running and the jobs start working the moment creds are added.
  */
-function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngStore, vault: TokenVault, http: HttpClient): Scheduler {
+function buildScheduler(config: ServerConfig, store: LoopsStore, engStore: EngStore, vault: TokenVault, http: HttpClient, jiraSync: JiraSyncService | null): Scheduler {
   const scheduler = new Scheduler((job, err) => {
     console.error(`[scheduler:${job}] skipped — ${err instanceof Error ? err.message : String(err)}`);
   });
@@ -287,5 +287,5 @@ export function buildAppFromConfig(config: ServerConfig): { app: FastifyInstance
     buildGithub: () => (config.githubToken ? new RestGithubClient(config.githubToken) : null),
     now: () => new Date().toISOString(),
   };
-  return { app: buildApp(deps), store, scheduler: buildScheduler(config, store, engStore, vault, http) };
+  return { app: buildApp(deps), store, scheduler: buildScheduler(config, store, engStore, vault, http, jiraSync) };
 }
