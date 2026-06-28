@@ -767,3 +767,49 @@ describe("engineering routes", () => {
     expect(body.done).toBe(true);
   });
 });
+
+describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
+  it("sets claudeModel and reflects it in GET /tasks/:id", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+
+    const res = await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: "claude-opus-4-8" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(engStore.get(id)?.claudeModel).toBe("claude-opus-4-8");
+  });
+
+  it("resets claudeModel to null (global default)", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    engStore.setModel(id, "claude-opus-4-8", NOW);
+
+    const res = await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: null } });
+    expect(res.statusCode).toBe(200);
+    expect(engStore.get(id)?.claudeModel).toBeNull();
+  });
+
+  it("rejects unknown model strings with 400", async () => {
+    const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+
+    const res = await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: "gpt-4o" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("unknown model");
+  });
+
+  it("returns 403 without a self identity", async () => {
+    const { app, engStore } = makeApp(); // no selfAccountId
+    engStore.upsertFromJira([engInput({ assignee: "acct-1" })], NOW);
+    const id = taskId("LK-1");
+    expect((await app.inject({ method: "PATCH", url: `/tasks/${id}`, payload: { claudeModel: "claude-opus-4-8" } })).statusCode).toBe(403);
+  });
+
+  it("returns 404 for unknown task", async () => {
+    const { app } = makeApp({ selfAccountId: "acct-1" });
+    expect((await app.inject({ method: "PATCH", url: "/tasks/task_nonexistent", payload: { claudeModel: "claude-sonnet-4-6" } })).statusCode).toBe(404);
+  });
+});

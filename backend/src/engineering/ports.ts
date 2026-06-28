@@ -37,6 +37,8 @@ export interface AgentRunArgs {
    * The orchestrator registers this in the cancel registry so the worker can kill on demand.
    */
   onCancelRegistered?: (kill: () => void) => void;
+  /** Per-run model override; falls back to the runner's global config when absent or null. */
+  model?: string | null;
 }
 
 export interface AgentRunner {

@@ -138,7 +138,7 @@ export class Orchestrator {
     task = this.#require(taskId);
 
     const runId = engStore.startAgentRun({ taskId, stage: "plan", sessionId, iteration: 0, startedTs: now() });
-    const run = await agentRunner.run({ taskId, stage: "plan", sessionId, worktreePath: ws.path, mode: "plan", resume: false, prompt: renderPlanPrompt(task), onCancelRegistered: this.#onCancelRegistered(taskId) });
+    const run = await agentRunner.run({ taskId, stage: "plan", sessionId, worktreePath: ws.path, mode: "plan", resume: false, prompt: renderPlanPrompt(task), model: task.claudeModel, onCancelRegistered: this.#onCancelRegistered(taskId) });
     this.#d.cancelRegistry?.delete(taskId);
     engStore.finishAgentRun(runId, {
       status: run.ok ? "succeeded" : "failed",
@@ -182,7 +182,7 @@ export class Orchestrator {
       const prompt = first ? renderDevPrompt(task) : buildSeed ? renderBuildFixPrompt(lastTestSummary) : renderFixPrompt(lastTestSummary);
       buildSeed = false;
       const runId = engStore.startAgentRun({ taskId, stage: "dev", sessionId, iteration: budget?.iterationsUsed ?? 0, startedTs: now() });
-      const run = await agentRunner.run({ taskId, stage: "dev", sessionId, worktreePath: ws.path, mode: "execute", resume: true, prompt, coldStartPrompt: renderColdStartPrompt(task, branchLog), onCancelRegistered: this.#onCancelRegistered(taskId) });
+      const run = await agentRunner.run({ taskId, stage: "dev", sessionId, worktreePath: ws.path, mode: "execute", resume: true, prompt, coldStartPrompt: renderColdStartPrompt(task, branchLog), model: task.claudeModel, onCancelRegistered: this.#onCancelRegistered(taskId) });
       this.#d.cancelRegistry?.delete(taskId);
       engStore.finishAgentRun(runId, {
         status: run.ok ? "succeeded" : "failed",
@@ -280,6 +280,7 @@ export class Orchestrator {
       resume: true,
       prompt: renderAddressCommentsPrompt(comments),
       coldStartPrompt: renderColdStartPrompt(task, await workspace.branchLog(task)),
+      model: task.claudeModel,
       onCancelRegistered: this.#onCancelRegistered(taskId),
     });
     this.#d.cancelRegistry?.delete(taskId);

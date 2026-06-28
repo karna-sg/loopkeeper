@@ -200,6 +200,27 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     }
   });
 
+  // --- Per-task model override (LP-27) ---
+
+  const ALLOWED_MODELS = new Set(["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]);
+
+  app.patch("/tasks/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const err = assigneeError(task);
+    if (err) return reply.code(403).send({ error: err });
+    const body = (req.body ?? {}) as { claudeModel?: string | null };
+    if ("claudeModel" in body) {
+      const m = body.claudeModel;
+      if (m !== null && m !== undefined && !ALLOWED_MODELS.has(m)) {
+        return reply.code(400).send({ error: `unknown model; allowed: ${[...ALLOWED_MODELS].join(", ")}` });
+      }
+      engStore.setModel(id, m ?? null, deps.now());
+    }
+    return { ok: true };
+  });
+
   // --- Prepare Plan (FR-9/10) ---
 
   app.post("/tasks/:id/prepare-plan", async (req, reply) => {

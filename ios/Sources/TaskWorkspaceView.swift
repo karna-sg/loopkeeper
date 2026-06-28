@@ -37,6 +37,7 @@ struct TaskWorkspaceView: View {
                 if let task {
                     VStack(alignment: .leading, spacing: 18) {
                         header(task)
+                        if !task.isRunning { modelPicker(task) }
                         if task.isRunning { stopAction(task) }
                         if task.needsAction { gate(task) }
                         primaryAction(task)
@@ -63,6 +64,28 @@ struct TaskWorkspaceView: View {
                 pollTask?.cancel()
                 activityPollTask?.cancel()
             }
+        }
+    }
+
+    // MARK: model picker (LP-27)
+
+    @ViewBuilder private func modelPicker(_ task: EngTask) -> some View {
+        let label: String = {
+            switch task.claudeModel {
+            case "claude-opus-4-8": return "opus"
+            case "claude-sonnet-4-6": return "sonnet"
+            case "claude-haiku-4-5-20251001": return "haiku"
+            default: return "default"
+            }
+        }()
+        Menu {
+            Button("default (global)") { Task { await model.setModel(task, model: nil); await reload() } }
+            Button("sonnet  (claude-sonnet-4-6)") { Task { await model.setModel(task, model: "claude-sonnet-4-6"); await reload() } }
+            Button("opus    (claude-opus-4-8)") { Task { await model.setModel(task, model: "claude-opus-4-8"); await reload() } }
+            Button("haiku   (claude-haiku-4-5-20251001)") { Task { await model.setModel(task, model: "claude-haiku-4-5-20251001"); await reload() } }
+        } label: {
+            Text("model: \(label)")
+                .font(monoSmall).foregroundStyle(.secondary)
         }
     }
 
