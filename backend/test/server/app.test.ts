@@ -90,6 +90,22 @@ describe("REST app", () => {
     expect(res.json()).toMatchObject({ ok: true, loops: 0 });
   });
 
+  it("GET /version returns build info", async () => {
+    const { app } = makeApp();
+    const res = await app.inject({ method: "GET", url: "/version" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      version: expect.any(String),
+      commit: expect.any(String),
+    });
+  });
+
+  it("GET /version is exempt from bearer-auth gate", async () => {
+    const { app } = makeApp({ apiToken: "s3cret" });
+    const res = await app.inject({ method: "GET", url: "/version" });
+    expect(res.statusCode).toBe(200);
+  });
+
   it("full flow: scan -> list -> brief -> done", async () => {
     const { app } = makeApp();
     const result = await runScan(app);
