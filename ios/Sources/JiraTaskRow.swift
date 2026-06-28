@@ -24,7 +24,7 @@ struct JiraTaskRow: View {
                     .foregroundStyle(.secondary)
                 Text(Theme.statusToken(task.stage, task.status))
                     .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(Theme.statusTint(task.status))
+                    .foregroundStyle(Theme.tickTint(task.status))
                 Spacer(minLength: 6)
                 if task.isRunning {
                     ProgressView().controlSize(.mini)
@@ -47,6 +47,6 @@ struct JiraTaskRow: View {
     }
 
     private var glyphTint: Color {
-        task.needsAction ? Theme.statusTint(task.status) : .secondary
+        Theme.tickTint(task.status)
     }
 }
