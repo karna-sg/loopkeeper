@@ -107,6 +107,27 @@ export interface DeployRun {
 }
 
 /** GitHub REST operations (backend-initiated: create / poll / merge / observe CD). Reconcile-before-act. */
+export interface DiffLine {
+  /** `+` = addition, `-` = deletion, ` ` = context */
+  type: "+" | "-" | " ";
+  text: string;
+}
+
+export interface DiffHunk {
+  /** The unified diff header line, e.g. `@@ -1,4 +1,6 @@`. */
+  header: string;
+  lines: DiffLine[];
+}
+
+export interface DiffFile {
+  path: string;
+  /** `added` | `modified` | `removed` | `renamed` | `copied` | `changed` | `unchanged` */
+  status: string;
+  additions: number;
+  deletions: number;
+  hunks: DiffHunk[];
+}
+
 export interface GithubPort {
   findOpenPr(repo: string, head: string): Promise<PullRequest | null>;
   createPr(args: { repo: string; head: string; base: string; title: string; body: string }): Promise<PullRequest>;
@@ -114,6 +135,8 @@ export interface GithubPort {
   merge(repo: string, num: number, method: "merge" | "squash" | "rebase"): Promise<{ sha: string; merged: boolean }>;
   /** Latest GitHub Actions deploy run for a commit (CD observation). `null` if no run exists yet. */
   getDeployRun(repo: string, sha: string): Promise<DeployRun | null>;
+  /** Parsed per-file diff hunks. Uses PR files endpoint if prNumber given, else compare {base}...{head}. */
+  getDiff(repo: string, args: { prNumber?: number; base?: string; head?: string }): Promise<DiffFile[]>;
 }
 
 export interface DeployOutcome {

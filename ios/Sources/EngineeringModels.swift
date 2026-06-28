@@ -193,3 +193,31 @@ struct JiraSettings: Codable {
     let baseBranch: String?
     let projectKey: String?
 }
+
+// MARK: - Diff models (GET /tasks/:id/diff)
+
+struct DiffLine: Codable {
+    /// `+` = addition, `-` = deletion, ` ` = context
+    let type: String
+    let text: String
+}
+
+struct DiffHunk: Codable {
+    let header: String
+    let lines: [DiffLine]
+}
+
+struct DiffFile: Codable, Identifiable {
+    let path: String
+    let status: String
+    let additions: Int?
+    let deletions: Int?
+    let hunks: [DiffHunk]
+    var id: String { path }
+}
+
+/// `GET /tasks/:id/diff`
+struct DiffResponse: Decodable {
+    let files: [DiffFile]
+    let truncated: Bool
+}

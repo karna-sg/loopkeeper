@@ -16,12 +16,16 @@ import type { HttpClient } from "../../src/oauth/http.ts";
 import type { NormalizedMessage, UserIdentity } from "../../src/domain/message.ts";
 import type { EngTaskInput } from "../../src/domain/eng-task.ts";
 import { taskId } from "../../src/domain/eng-task.ts";
+import type { GithubPort } from "../../src/engineering/ports.ts";
 
 const IDENTITY: UserIdentity = { displayName: "Karna", aliases: [], timezone: "Asia/Kolkata" };
 const NOW = "2026-06-25T04:00:00Z";
 const noopHttp: HttpClient = { post: async () => ({ ok: true, status: 200, json: async () => ({}), text: async () => "" }), getJson: async () => ({}) };
 
-function makeApp(configOverrides: Partial<ServerConfig> = {}): { app: ReturnType<typeof buildApp>; store: LoopsStore; engStore: EngStore; push: FakePushSender } {
+function makeApp(
+  configOverrides: Partial<ServerConfig> = {},
+  githubOverride?: GithubPort | null,
+): { app: ReturnType<typeof buildApp>; store: LoopsStore; engStore: EngStore; push: FakePushSender } {
   const store = new LoopsStore(":memory:");
   const engStore = new EngStore(":memory:");
   const messages: NormalizedMessage[] = [
@@ -48,6 +52,7 @@ function makeApp(configOverrides: Partial<ServerConfig> = {}): { app: ReturnType
     buildJiraSync: () => {
       throw new Error("Jira not connected");
     },
+    buildGithub: () => githubOverride ?? null,
     now: () => NOW,
   };
   return { app: buildApp(deps), store, engStore, push };
@@ -536,5 +541,80 @@ describe("engineering routes", () => {
     expect(engStore.get(id)).toMatchObject({ stage: "rollback", status: "in_progress" });
     expect(engStore.runningJobForTask(id)?.kind).toBe("rollback");
     expect(engStore.events(id).find((e) => e.toStage === "rollback" && e.toStatus === "in_progress")).toMatchObject({ gateApproved: true, actor: "user" });
+  });
+
+  it("GET /tasks/:id/diff returns 503 when GitHub is not configured", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+    const res = await app.inject({ method: "GET", url: `/tasks/${id}/diff` });
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("GET /tasks/:id/diff returns 404 for unknown task", async () => {
+    const fakeGithub: GithubPort = {
+      findOpenPr: async () => null,
+      createPr: async () => ({ number: 1, url: "https://github.com/x/y/pull/1" }),
+      getPr: async () => ({ number: 1, url: "", reviewDecision: null, merged: false, comments: [] }),
+      merge: async () => ({ sha: "abc", merged: true }),
+      getDeployRun: async () => null,
+      getDiff: async () => [],
+    };
+    const { app } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
+    expect((await app.inject({ method: "GET", url: "/tasks/nope/diff" })).statusCode).toBe(404);
+  });
+
+  it("GET /tasks/:id/diff returns empty files when task has no branch or PR", async () => {
+    const fakeGithub: GithubPort = {
+      findOpenPr: async () => null,
+      createPr: async () => ({ number: 1, url: "https://github.com/x/y/pull/1" }),
+      getPr: async () => ({ number: 1, url: "", reviewDecision: null, merged: false, comments: [] }),
+      merge: async () => ({ sha: "abc", merged: true }),
+      getDeployRun: async () => null,
+      getDiff: async () => [],
+    };
+    const { app, engStore } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+    const res = (await app.inject({ method: "GET", url: `/tasks/${id}/diff` })).json() as { files: unknown[]; truncated: boolean };
+    expect(res.files).toEqual([]);
+    expect(res.truncated).toBe(false);
+  });
+
+  it("GET /tasks/:id/diff returns parsed diff files from GitHub", async () => {
+    const fakeDiff = [
+      {
+        path: "src/foo.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        hunks: [{ header: "@@ -1,3 +1,4 @@", lines: [{ type: " " as const, text: "context" }, { type: "-" as const, text: "old line" }, { type: "+" as const, text: "new line" }] }],
+      },
+    ];
+    const fakeGithub: GithubPort = {
+      findOpenPr: async () => null,
+      createPr: async () => ({ number: 1, url: "https://github.com/x/y/pull/1" }),
+      getPr: async () => ({ number: 1, url: "", reviewDecision: null, merged: false, comments: [] }),
+      merge: async () => ({ sha: "abc", merged: true }),
+      getDeployRun: async () => null,
+      getDiff: async (_repo, args) => {
+        // compare path: when branch is set but no prNumber
+        if (!args.prNumber) return fakeDiff;
+        return [];
+      },
+    };
+    const { app, engStore } = makeApp({ github: { repo: "karna/loopkeeper", baseBranch: "main" } }, fakeGithub);
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("LK-1");
+    // Drive to dev:done so the task has a branch set.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW });
+    engStore.setArtifact(id, { dev: { summary: "did work", branch: "LK-1-add-thing", branchURL: null, filesChanged: 1, iterations: 1, lastIterationTs: NOW } }, NOW);
+    const res = (await app.inject({ method: "GET", url: `/tasks/${id}/diff` })).json() as { files: typeof fakeDiff; truncated: boolean };
+    expect(res.files).toHaveLength(1);
+    expect(res.files[0]).toMatchObject({ path: "src/foo.ts", additions: 2, deletions: 1 });
+    expect(res.files[0]?.hunks[0]?.lines).toHaveLength(3);
+    expect(res.truncated).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
-import type { DeployRun, GithubPort, PrState, PullRequest } from "../ports.ts";
+import type { DeployRun, DiffFile, DiffHunk, DiffLine, GithubPort, PrState, PullRequest } from "../ports.ts";
 import type { ReviewComment } from "../../domain/eng-task.ts";
+import { redactSecrets } from "../../redact.ts";
 
 /**
  * GitHub REST adapter (the live impl of GithubPort; the port itself is the test seam). Uses the
@@ -73,6 +74,26 @@ export class RestGithubClient implements GithubPort {
     return { sha: data.sha, merged: true };
   }
 
+  async getDiff(repo: string, args: { prNumber?: number; base?: string; head?: string }): Promise<DiffFile[]> {
+    type GhFile = { filename: string; previous_filename?: string; status: string; additions: number; deletions: number; patch?: string };
+    let raw: GhFile[];
+    if (args.prNumber) {
+      raw = (await this.#get(`/repos/${repo}/pulls/${args.prNumber}/files?per_page=100`)) as GhFile[];
+    } else if (args.base && args.head) {
+      const compare = (await this.#get(`/repos/${repo}/compare/${args.base}...${args.head}`)) as { files?: GhFile[] };
+      raw = compare.files ?? [];
+    } else {
+      return [];
+    }
+    return raw.map((f) => ({
+      path: f.status === "renamed" && f.previous_filename ? `${f.previous_filename} → ${f.filename}` : f.filename,
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      hunks: f.patch ? parsePatch(f.patch) : [],
+    }));
+  }
+
   async getDeployRun(repo: string, sha: string): Promise<DeployRun | null> {
     // The push-to-main run(s) for this commit; prefer the deploy workflow, else the latest.
     const list = (await this.#get(`/repos/${repo}/actions/runs?head_sha=${sha}&event=push&per_page=20`)) as {
@@ -92,6 +113,8 @@ export class RestGithubClient implements GithubPort {
   }
 }
 
+const MAX_DIFF_LINES = 300;
+
 function latestDecision(reviews: Array<{ state: string }>): PrState["reviewDecision"] {
   let decision: PrState["reviewDecision"] = null;
   for (const r of reviews) {
@@ -99,4 +122,34 @@ function latestDecision(reviews: Array<{ state: string }>): PrState["reviewDecis
     else if (r.state === "CHANGES_REQUESTED") decision = "CHANGES_REQUESTED";
   }
   return decision;
+}
+
+/**
+ * Parse a unified diff patch string (as returned by the GitHub API's `patch` field) into typed hunks.
+ * Each hunk starts with a `@@ ... @@` header; lines are classified by their first character.
+ * Secrets are redacted from line content before returning.
+ */
+export function parsePatch(patch: string): DiffHunk[] {
+  const hunks: DiffHunk[] = [];
+  let current: DiffHunk | null = null;
+  let lineCount = 0;
+
+  for (const raw of patch.split("\n")) {
+    if (raw.startsWith("@@")) {
+      if (current) hunks.push(current);
+      current = { header: raw, lines: [] };
+      lineCount = 0;
+    } else if (current) {
+      if (lineCount >= MAX_DIFF_LINES) continue;
+      const ch = raw[0];
+      let type: DiffLine["type"] = " ";
+      if (ch === "+") type = "+";
+      else if (ch === "-") type = "-";
+      const text = redactSecrets(raw.slice(1));
+      current.lines.push({ type, text });
+      lineCount++;
+    }
+  }
+  if (current) hunks.push(current);
+  return hunks;
 }

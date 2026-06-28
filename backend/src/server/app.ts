@@ -268,6 +268,7 @@ export function buildAppFromConfig(config: ServerConfig): { app: FastifyInstance
     buildDraftClient: () => buildDraftClient(config),
     listSlackChannels: () => buildProdListChannels(vault, http),
     buildJiraSync: () => buildProdJiraSync(config, engStore, vault, http),
+    buildGithub: () => (config.githubToken ? new RestGithubClient(config.githubToken) : null),
     now: () => new Date().toISOString(),
   };
   return { app: buildApp(deps), store, scheduler: buildScheduler(config, store, engStore, vault, http) };

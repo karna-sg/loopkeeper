@@ -9,6 +9,7 @@ import type { NudgeService } from "../nudge/nudge-service.ts";
 import type { DraftClient } from "../draft/draft-composer.ts";
 import type { SlackChannelInfo } from "../sources/slack-source.ts";
 import type { JiraSyncService } from "../engineering/jira/jira-sync.ts";
+import type { GithubPort } from "../engineering/ports.ts";
 
 /** Everything the routes need, injected so the app is testable with fakes. */
 export interface AppDeps {
@@ -29,6 +30,8 @@ export interface AppDeps {
   listSlackChannels: () => Promise<SlackChannelInfo[]>;
   /** Built lazily; throws if Jira isn't connected. Imports assigned issues into eng.db (FR-2). */
   buildJiraSync: () => JiraSyncService;
+  /** Returns a GitHub client when a token is configured, null otherwise. */
+  buildGithub: () => GithubPort | null;
   /** Current instant (ISO). Injectable for deterministic tests. */
   now: () => string;
 }

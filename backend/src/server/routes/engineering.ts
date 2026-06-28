@@ -46,6 +46,25 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     return { task, events: engStore.events(id) };
   });
 
+  app.get("/tasks/:id/diff", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const github = deps.buildGithub();
+    if (!config.github || !github) return reply.code(503).send({ error: "GitHub not configured" });
+    const pr = task.artifacts.pr;
+    const branch = task.branch ?? task.artifacts.dev?.branch ?? null;
+    if (!pr?.number && !branch) return { files: [], truncated: false };
+    try {
+      const args = pr?.number ? { prNumber: pr.number } : { base: config.github.baseBranch, head: branch! };
+      const files = await github.getDiff(task.repo, args);
+      const truncated = files.length > 50;
+      return { files: files.slice(0, 50), truncated };
+    } catch (err) {
+      return reply.code(502).send({ error: err instanceof Error ? err.message : "GitHub diff unavailable" });
+    }
+  });
+
   app.get("/tasks/:id/status", async (req, reply) => {
     const { id } = req.params as { id: string };
     const task = engStore.get(id);
