@@ -32,6 +32,11 @@ export interface AgentRunArgs {
   prompt: string;
   /** Fallback prompt (approved plan + branch state) used when `--resume` fails (cold-start, P0-2). */
   coldStartPrompt?: string;
+  /**
+   * Called once the Claude process is spawned, with a function that kills its process group.
+   * The orchestrator registers this in the cancel registry so the worker can kill on demand.
+   */
+  onCancelRegistered?: (kill: () => void) => void;
 }
 
 export interface AgentRunner {

@@ -221,6 +221,73 @@ describe("orchestrator: budget escalation", () => {
   });
 });
 
+describe("worker: cancel-watcher integration", () => {
+  it("does not escalate when a task is cancelled mid-job (already blocked by cancel route)", async () => {
+    // Simulate the cancel route setting cancel_pending + blocked before/during job execution.
+    // The fake runner succeeds but the task is already blocked — escalate must NOT overwrite it.
+    const { engStore, worker } = harness();
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+
+    // Drive to plan:in_progress and enqueue a plan job.
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    // Simulate the cancel route: set cancel_pending + transition to blocked + cancel queued jobs.
+    engStore.setCancelPending(id, NOW);
+    engStore.cancelJobsForTask(id, NOW);
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "blocked" }, actor: "system", note: "user cancel", ts: NOW });
+    engStore.setProgress(id, { lastError: "Cancelled by user." }, NOW);
+
+    // No jobs remain in the queue — tick does nothing.
+    expect(await worker.tick()).toBe(false);
+    // Task stays blocked with the cancel error.
+    const task = engStore.get(id)!;
+    expect(task.status).toBe("blocked");
+    expect(task.lastError).toBe("Cancelled by user.");
+  });
+
+  it("cancel registry: kill callback is registered during the run and cleaned up after", async () => {
+    // Verify the orchestrator populates cancelRegistry during agentRunner.run() and deletes on completion.
+    const cancelRegistry = new Map<string, () => void>();
+    const timeline: string[] = [];
+    const engStore = new EngStore(":memory:");
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+
+    // Fake runner that checks the registry is populated during the run (before cleanup).
+    class CapturingRunner {
+      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+        if (args.onCancelRegistered) {
+          args.onCancelRegistered(() => {}); // register a no-op kill
+        }
+        // Registry must be set synchronously by onCancelRegistered before we reach this line.
+        if (cancelRegistry.has(args.taskId)) timeline.push("registered");
+        return { ok: true, sessionId: args.sessionId, finalText: "done", usdCents: 5, numTurns: 1, exitCode: 0, timedOut: false };
+      }
+    }
+    const orchestrator = new Orchestrator({
+      engStore,
+      agentRunner: new CapturingRunner(),
+      workspace: new FakeWorkspace(),
+      tester: new FakeTester(true),
+      github: new FakeGithub(),
+      deployer: new FakeDeployer(),
+      deployEnabled: false,
+      deployEnv: "prod",
+      now: () => NOW,
+      cancelRegistry,
+    });
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    const job = engStore.claimNext("w1", NOW, "2030-01-01T00:00:00Z")!;
+    engStore.markJobRunning(job.id, NOW);
+    await orchestrator.runJob(job);
+    // Registry is cleaned up after the run.
+    expect(cancelRegistry.has(id)).toBe(false);
+    // Kill was registered during the run.
+    expect(timeline).toEqual(["registered"]);
+  });
+});
+
 describe("orchestrator: deploy disabled is a no-op", () => {
   it("leaves the task at merged when deploy is disabled", async () => {
     const { engStore, worker } = harness({ deployEnabled: false });

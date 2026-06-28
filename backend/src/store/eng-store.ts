@@ -325,7 +325,9 @@ export class EngStore {
       CREATE INDEX IF NOT EXISTS idx_eng_runs_task ON eng_agent_runs(task_id, started_ts);
     `);
     // Post-deploy column additions go here (try/catch ALTER), same no-migration convention as LoopsStore.
-    for (const ddl of [] as string[]) {
+    for (const ddl of [
+      "ALTER TABLE eng_tasks ADD COLUMN cancel_pending INTEGER NOT NULL DEFAULT 0",
+    ] as string[]) {
       try {
         this.#db.exec(ddl);
       } catch {
@@ -555,10 +557,23 @@ export class EngStore {
         maxUsdCents: caps.maxUsdCents ?? task.budget.maxUsdCents,
         maxReviewRounds: caps.maxReviewRounds ?? task.budget.maxReviewRounds,
       };
-      this.#db.prepare("UPDATE eng_tasks SET budget = ?, updated_ts = ? WHERE id = ?").run(JSON.stringify(b), nowIso, id);
+      this.#db.prepare("UPDATE eng_tasks SET budget = ?, cancel_pending = 0, updated_ts = ? WHERE id = ?").run(JSON.stringify(b), nowIso, id);
       return b;
     });
     return tx();
+  }
+
+  // --- Cancel support ---
+
+  /** Signal that the user wants to stop the running agent for this task. */
+  setCancelPending(taskId: string, nowIso: string): boolean {
+    return this.#db.prepare("UPDATE eng_tasks SET cancel_pending = 1, updated_ts = ? WHERE id = ?").run(nowIso, taskId).changes > 0;
+  }
+
+  /** Worker cancel-watcher polls this to know when to kill the live process. */
+  isTaskCancelPending(taskId: string): boolean {
+    const row = this.#db.prepare("SELECT cancel_pending FROM eng_tasks WHERE id = ?").get(taskId) as { cancel_pending: number } | undefined;
+    return row?.cancel_pending === 1;
   }
 
   // --- Job queue ---

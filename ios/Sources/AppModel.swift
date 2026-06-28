@@ -292,6 +292,7 @@ final class AppModel {
     func approveReview(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approveReview(t.id) }) { lastActionLabel = "Review approved — ready to merge" } }
     func approveMerge(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.approveMerge(t.id) }) { lastActionLabel = "Merging" } }
     func retryTask(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.retryTask(t.id) }) { lastActionLabel = "Retrying" } }
+    func cancelTask(_ t: EngTask) async { Haptics.warning(); if await mutateTasks({ try await api.cancelTask(t.id) }) { lastActionLabel = "Stopping…" } }
 
     private func upsertTask(_ t: EngTask) {
         if let i = engineeringTasks.firstIndex(where: { $0.id == t.id }) { engineeringTasks[i] = t } else { engineeringTasks.append(t) }

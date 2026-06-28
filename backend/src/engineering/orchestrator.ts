@@ -18,6 +18,8 @@ export interface OrchestratorDeps {
   deployMode: "github-actions" | "ssh";
   deployEnv: string;
   now: () => string;
+  /** Shared map; the orchestrator registers kill callbacks here so the worker cancel-watcher can signal them. */
+  cancelRegistry?: Map<string, () => void>;
 }
 
 /**
@@ -79,6 +81,13 @@ export class Orchestrator {
     applyTransition(this.#d.engStore, { taskId, to: { stage: task.stage, status: "blocked" }, actor: "system", note: truncate(reason), ts: now }, now);
   }
 
+  /** Returns an `onCancelRegistered` callback that stores the kill fn in the shared registry. */
+  #onCancelRegistered(taskId: string): ((kill: () => void) => void) | undefined {
+    const registry = this.#d.cancelRegistry;
+    if (!registry) return undefined;
+    return (kill) => registry.set(taskId, kill);
+  }
+
   #require(taskId: string): EngTask {
     const task = this.#d.engStore.get(taskId);
     if (!task) throw new Error(`task ${taskId} not found`);
@@ -112,7 +121,8 @@ export class Orchestrator {
     task = this.#require(taskId);
 
     const runId = engStore.startAgentRun({ taskId, stage: "plan", sessionId, iteration: 0, startedTs: now() });
-    const run = await agentRunner.run({ taskId, stage: "plan", sessionId, worktreePath: ws.path, mode: "plan", resume: false, prompt: renderPlanPrompt(task) });
+    const run = await agentRunner.run({ taskId, stage: "plan", sessionId, worktreePath: ws.path, mode: "plan", resume: false, prompt: renderPlanPrompt(task), onCancelRegistered: this.#onCancelRegistered(taskId) });
+    this.#d.cancelRegistry?.delete(taskId);
     engStore.finishAgentRun(runId, {
       status: run.ok ? "succeeded" : "failed",
       finishedTs: now(),
@@ -151,7 +161,8 @@ export class Orchestrator {
       const task = this.#require(taskId);
       const prompt = first ? renderDevPrompt(task) : renderFixPrompt(lastTestSummary);
       const runId = engStore.startAgentRun({ taskId, stage: "dev", sessionId, iteration: budget?.iterationsUsed ?? 0, startedTs: now() });
-      const run = await agentRunner.run({ taskId, stage: "dev", sessionId, worktreePath: ws.path, mode: "execute", resume: true, prompt, coldStartPrompt: renderColdStartPrompt(task, branchLog) });
+      const run = await agentRunner.run({ taskId, stage: "dev", sessionId, worktreePath: ws.path, mode: "execute", resume: true, prompt, coldStartPrompt: renderColdStartPrompt(task, branchLog), onCancelRegistered: this.#onCancelRegistered(taskId) });
+      this.#d.cancelRegistry?.delete(taskId);
       engStore.finishAgentRun(runId, {
         status: run.ok ? "succeeded" : "failed",
         finishedTs: now(),
@@ -248,7 +259,9 @@ export class Orchestrator {
       resume: true,
       prompt: renderAddressCommentsPrompt(comments),
       coldStartPrompt: renderColdStartPrompt(task, await workspace.branchLog(task)),
+      onCancelRegistered: this.#onCancelRegistered(taskId),
     });
+    this.#d.cancelRegistry?.delete(taskId);
     engStore.finishAgentRun(runId, {
       status: run.ok ? "succeeded" : "failed",
       finishedTs: now(),

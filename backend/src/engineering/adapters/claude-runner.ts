@@ -86,6 +86,7 @@ export class ClaudeAgentRunner implements AgentRunner {
         if (logPath) this.#appendLog(logPath, line);
         this.#consume(line, parsed);
       },
+      onKillable: args.onCancelRegistered,
     });
 
     // Plan mode → ExitPlanMode.plan; execute → result text; fall back to the last assistant message.
