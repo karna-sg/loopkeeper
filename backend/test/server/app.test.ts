@@ -324,7 +324,7 @@ describe("REST app", () => {
 describe("engineering routes", () => {
   it("GET /tasks returns imported tasks (empty before any import)", async () => {
     const { app, engStore } = makeApp();
-    expect((await app.inject({ method: "GET", url: "/tasks" })).json()).toEqual({ tasks: [] });
+    expect(((await app.inject({ method: "GET", url: "/tasks" })).json() as { tasks: unknown[] }).tasks).toEqual([]);
     engStore.upsertFromJira([engInput()], NOW);
     const tasks = ((await app.inject({ method: "GET", url: "/tasks" })).json() as { tasks: Array<{ jiraKey: string; stage: string; status: string }> }).tasks;
     expect(tasks).toHaveLength(1);
@@ -333,7 +333,7 @@ describe("engineering routes", () => {
 
   it("filters /tasks to the assignee when a self identity is configured", async () => {
     const { app, engStore } = makeApp({ selfAccountId: "acct-1" });
-    engStore.upsertFromJira([engInput({ jiraKey: "LK-1", assignee: "acct-1" }), engInput({ jiraKey: "LK-2", assignee: "someone-else" })], NOW);
+    engStore.upsertFromJira([engInput({ jiraKey: "LK-1", jiraId: "10001", assignee: "acct-1" }), engInput({ jiraKey: "LK-2", jiraId: "10002", assignee: "someone-else" })], NOW);
     const tasks = ((await app.inject({ method: "GET", url: "/tasks" })).json() as { tasks: Array<{ jiraKey: string }> }).tasks;
     expect(tasks.map((t) => t.jiraKey)).toEqual(["LK-1"]);
   });
