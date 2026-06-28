@@ -135,7 +135,7 @@ struct TaskWorkspaceView: View {
                 Text("tap a stage to expand").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
             }
             .padding(.bottom, 8)
-            ForEach(engStages, id: \.self) { stage in
+            ForEach(pipelineStages(task), id: \.self) { stage in
                 StageBlock(
                     stage: stage,
                     status: statusFor(stage, task),
@@ -144,7 +144,7 @@ struct TaskWorkspaceView: View {
                     mono: mono,
                     monoSmall: monoSmall
                 )
-                if stage != engStages.last {
+                if stage != pipelineStages(task).last {
                     Rectangle().fill(Color.secondary.opacity(0.12)).frame(height: 1)
                 }
             }
@@ -167,6 +167,17 @@ struct TaskWorkspaceView: View {
                 reviewGate(task)
             case "merge:ready":
                 mergeGate(task)
+            case "verify:awaiting_review":
+                verifyGate(task)
+            case "verify:failed":
+                verifyFailedGate(task)
+            case "rollback:ready":
+                actionButton("confirm rollback", .red) { await model.rollback(task); await reload() }
+            case "rollback:failed":
+                if let err = task.lastError, !err.isEmpty {
+                    Text(err).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
+                }
+                actionButton("retry rollback", .orange) { await model.rollback(task); await reload() }
             default:
                 // blocked / deploy:failed / escalated — retry path.
                 if let err = task.lastError, !err.isEmpty {
@@ -239,6 +250,32 @@ struct TaskWorkspaceView: View {
             .font(monoSmall).foregroundStyle(.secondary)
     }
 
+    @ViewBuilder private func verifyGate(_ task: EngTask) -> some View {
+        if let v = task.artifacts?.verify {
+            if let s = v.changeSummary, !s.isEmpty {
+                (Text("shipped: ").foregroundColor(.secondary) + Text(s)).font(monoSmall).textSelection(.enabled)
+            }
+            let ok = v.healthOk ?? false
+            (Text("smoke: ").foregroundColor(.secondary) + Text(ok ? "✓ healthy" : "✗ check failed").foregroundColor(ok ? .secondary : .red))
+                .font(monoSmall)
+            if let url = v.runUrl, let u = URL(string: url) { linkButton("view deploy run") { openURL(u) } }
+        }
+        actionButton("verified — looks good", .green) { await model.confirmVerify(task); await reload() }
+        actionButton("roll back", .orange) { await model.rollback(task); await reload() }
+        Text("Confirm the deployed change is live and working, or roll back (revert + redeploy).")
+            .font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func verifyFailedGate(_ task: EngTask) -> some View {
+        if let v = task.artifacts?.verify, let o = v.output, !o.isEmpty {
+            Text(o).font(monoSmall).foregroundStyle(.red).textSelection(.enabled)
+        }
+        actionButton("re-check", .blue) { await model.retryVerify(task); await reload() }
+        actionButton("roll back", .orange) { await model.rollback(task); await reload() }
+        Text("Rollback reverts the code (revert + redeploy). It does not undo data/migrations.")
+            .font(monoSmall).foregroundStyle(.secondary)
+    }
+
     // MARK: stop action (visible while a stage is running)
 
     @ViewBuilder private func stopAction(_ task: EngTask) -> some View {
@@ -296,6 +333,11 @@ struct TaskWorkspaceView: View {
     }
 
     // MARK: data
+
+    /// The linear pipeline, plus a rollback row only when this task actually entered rollback.
+    private func pipelineStages(_ task: EngTask) -> [String] {
+        (task.stage == "rollback" || task.artifacts?.rollback != nil) ? engStages + ["rollback"] : engStages
+    }
 
     private func statusFor(_ stage: String, _ task: EngTask) -> String {
         if stage == task.stage { return task.status }
@@ -428,6 +470,8 @@ private struct StageBlock: View {
         case "review": return !((a?.review?.comments ?? []).isEmpty)
         case "merge":  return !((a?.merge?.commitSha ?? "").isEmpty)
         case "deploy": return a?.deploy != nil
+        case "verify": return a?.verify != nil
+        case "rollback": return a?.rollback != nil
         default:       return false
         }
     }
@@ -495,6 +539,28 @@ private struct StageBlock: View {
                 }
                 if let url = dep.runUrl, let u = URL(string: url) { link("view run", u) }
                 if let log = dep.logTail, !log.isEmpty { bodyText(log, color: .secondary) }
+            }
+        case "verify":
+            if let v = task.artifacts?.verify {
+                if let s = v.changeSummary, !s.isEmpty {
+                    (Text("shipped ").foregroundColor(.secondary) + Text(s)).font(mono).textSelection(.enabled)
+                }
+                if let checks = v.checks {
+                    ForEach(Array(checks.enumerated()), id: \.offset) { _, c in
+                        (Text(c.ok == true ? "✓ " : "✗ ").foregroundColor(c.ok == true ? Theme.secondary : .red)
+                            + Text("\(c.name ?? "check")\(c.detail.map { " · \($0)" } ?? "")").foregroundColor(.secondary))
+                            .font(monoSmall).textSelection(.enabled)
+                    }
+                }
+                if let url = v.runUrl, let u = URL(string: url) { link("view run", u) }
+            }
+        case "rollback":
+            if let rb = task.artifacts?.rollback {
+                (Text("rollback ").foregroundColor(.secondary) + Text(rb.status ?? "—").foregroundColor(Theme.statusTint(rb.status ?? "")))
+                    .font(mono).textSelection(.enabled)
+                if let t = rb.targetSha, !t.isEmpty { dim("reverted \(t)") }
+                if let url = rb.prUrl, let u = URL(string: url) { link("revert PR", u) }
+                if let log = rb.logTail, !log.isEmpty { bodyText(log, color: .secondary) }
             }
         default:
             EmptyView()

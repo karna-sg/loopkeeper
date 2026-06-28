@@ -64,6 +64,8 @@ export interface Workspace {
   commitAndPush(task: EngTask, message: string): Promise<CommitResult>;
   /** Short summary of commits on the branch (for cold-start prompts). */
   branchLog(task: EngTask): Promise<string>;
+  /** Create a revert of `sha` on a fresh `rollback/*` branch off the default branch + push it (rollback). */
+  revert(task: EngTask, sha: string): Promise<{ revertSha: string; branch: string }>;
   remove(task: EngTask): Promise<void>;
 }
 

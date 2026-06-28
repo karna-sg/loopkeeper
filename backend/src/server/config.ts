@@ -116,6 +116,8 @@ export interface ServerConfig {
   githubToken: string | null;
   /** SSH redeploy target; null = no deploy. */
   deploy: DeployConfig | null;
+  /** Prod URL the post-deploy verify stage smoke-checks (e.g. https://host/healthz). Null → manual confirm only. */
+  deployVerifyUrl: string | null;
   /** Engineering knobs. */
   eng: EngConfig;
   /** Scheduler intervals (api side); 0 disables that job. */
@@ -232,6 +234,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     github: envGithub(env),
     githubToken: env.GITHUB_TOKEN ?? null,
     deploy: envDeploy(env),
+    deployVerifyUrl: env.DEPLOY_VERIFY_URL ?? null,
     eng: envEng(env, dataDir),
     jiraSyncEveryMin: Number(env.LOOPKEEPER_JIRA_SYNC_EVERY_MIN ?? "10"),
     prPollEveryMin: Number(env.LOOPKEEPER_PR_POLL_EVERY_MIN ?? "5"),

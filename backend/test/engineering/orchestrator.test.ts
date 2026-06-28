@@ -45,6 +45,9 @@ class FakeWorkspace {
   async branchLog(): Promise<string> {
     return "";
   }
+  async revert(_task: EngTask, sha: string): Promise<{ revertSha: string; branch: string }> {
+    return { revertSha: `revert-${sha}`, branch: "rollback/lk-1" };
+  }
   async remove(): Promise<void> {}
 }
 
@@ -90,7 +93,7 @@ class FakeDeployer {
   }
 }
 
-function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh" } = {}) {
+function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh"; verifyUrl?: string | null } = {}) {
   const engStore = new EngStore(":memory:");
   const runner = opts.runner ?? new FakeAgentRunner();
   const tester = opts.tester ?? new FakeTester(true);
@@ -105,6 +108,7 @@ function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEn
     deployEnabled: opts.deployEnabled ?? true,
     deployMode: opts.deployMode ?? "ssh",
     deployEnv: "prod",
+    verifyUrl: opts.verifyUrl ?? null,
     now: () => NOW,
   });
   const worker = new WorkerRunner({ engStore, orchestrator, workerId: "w1", now: () => NOW, leaseMs: 60_000 });
@@ -162,16 +166,22 @@ describe("orchestrator: full happy-path lifecycle through the worker", () => {
     applyTransition(engStore, { taskId: id, to: { stage: "review", status: "approved" }, actor: "system", ts: NOW }, NOW);
     applyTransition(engStore, { taskId: id, to: { stage: "merge", status: "ready" }, actor: "system", ts: NOW }, NOW);
 
-    // Gate 3: approve merge → merged → deploy.
+    // Gate 3: approve merge → merged → deploy → auto post-deploy verify.
     applyTransition(engStore, { taskId: id, to: { stage: "merge", status: "merging" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
     await drain(worker);
-    expect(engStore.get(id)).toMatchObject({ stage: "deploy", status: "deployed" });
+    // Deploy succeeded → verify ran (no verify URL → smoke skipped, healthOk) → awaiting human sign-off.
+    expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "awaiting_review" });
     expect(engStore.get(id)!.artifacts.merge?.commitSha).toBe("mergesha");
     expect(engStore.get(id)!.artifacts.deploy?.status).toBe("deployed");
+    expect(engStore.get(id)!.artifacts.verify?.deployedSha).toBeTruthy();
 
-    // The audit log records the three gate crossings (gateApproved=1, actor user).
+    // Gate 4: confirm the deployed change is good → terminal.
+    applyTransition(engStore, { taskId: id, to: { stage: "verify", status: "verified" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+    expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "verified" });
+
+    // The audit log records the four gate crossings (gateApproved=1, actor user).
     const gateEvents = engStore.events(id).filter((e) => e.gateApproved);
-    expect(gateEvents.map((e) => `${e.toStage}:${e.toStatus}`)).toEqual(["plan:approved", "pr:creating", "merge:merging"]);
+    expect(gateEvents.map((e) => `${e.toStage}:${e.toStatus}`)).toEqual(["plan:approved", "pr:creating", "merge:merging", "verify:verified"]);
     expect(gateEvents.every((e) => e.actor === "user")).toBe(true);
     expect(engStore.hasGatedMerge(id)).toBe(true);
   });
@@ -274,6 +284,7 @@ describe("worker: cancel-watcher integration", () => {
       deployEnabled: false,
       deployMode: "ssh",
       deployEnv: "prod",
+      verifyUrl: null,
       now: () => NOW,
       cancelRegistry,
     });
@@ -357,5 +368,71 @@ describe("orchestrator: github-actions deploy mode observes (no SSH)", () => {
     expect(engStore.get(id)).toMatchObject({ stage: "deploy", status: "deploying" });
     expect(engStore.get(id)!.artifacts.merge?.commitSha).toBe("mergesha");
     expect(engStore.get(id)!.artifacts.deploy).toMatchObject({ status: "deploying", commitSha: "mergesha" });
+  });
+});
+
+describe("orchestrator: verify + rollback stages", () => {
+  const PATH_TO_MERGING: Array<{ stage: EngTask["stage"]; status: EngTask["status"]; gate?: boolean; actor: "user" | "system" }> = [
+    { stage: "plan", status: "in_progress", actor: "user" },
+    { stage: "plan", status: "completed_unapproved", actor: "system" },
+    { stage: "plan", status: "approved", gate: true, actor: "user" },
+    { stage: "dev", status: "in_progress", actor: "system" },
+    { stage: "dev", status: "done", actor: "system" },
+    { stage: "test", status: "in_progress", actor: "system" },
+    { stage: "test", status: "passed", actor: "system" },
+    { stage: "pr", status: "proposed", actor: "system" },
+    { stage: "pr", status: "creating", gate: true, actor: "user" },
+    { stage: "pr", status: "created", actor: "system" },
+    { stage: "review", status: "awaiting_review", actor: "system" },
+    { stage: "review", status: "approved", actor: "system" },
+    { stage: "merge", status: "ready", actor: "system" },
+    { stage: "merge", status: "merging", gate: true, actor: "user" },
+  ];
+  function seedToMerging(engStore: EngStore, id: string): void {
+    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null } }, NOW);
+    for (const s of PATH_TO_MERGING) {
+      const r = engStore.transition({ taskId: id, to: { stage: s.stage, status: s.status }, actor: s.actor, ...(s.gate ? { gateApproved: true } : {}), ts: NOW });
+      expect(r.ok, `${s.stage}:${s.status}`).toBe(true);
+    }
+    engStore.enqueue({ taskId: id, kind: "merge", dedupeKey: `${id}:merge` }, NOW);
+  }
+
+  it("auto-runs verify after deploy (no verify URL → awaiting manual sign-off)", async () => {
+    const { engStore, worker } = harness(); // ssh deploy mode, verifyUrl null
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+    seedToMerging(engStore, id);
+    await drain(worker);
+    expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "awaiting_review" });
+    expect(engStore.get(id)!.artifacts.verify?.healthOk).toBe(true);
+  });
+
+  it("routes a failed post-deploy smoke to verify:failed", async () => {
+    const { engStore, worker } = harness({ verifyUrl: "http://127.0.0.1:1/healthz" }); // refused → smoke fails
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+    seedToMerging(engStore, id);
+    await drain(worker);
+    expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "failed" });
+    expect(engStore.get(id)!.artifacts.verify?.healthOk).toBe(false);
+  });
+
+  it("rolls back via a revert PR → rolled_back", async () => {
+    const { engStore, worker } = harness();
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("LK-1");
+    seedToMerging(engStore, id);
+    await drain(worker);
+    expect(engStore.get(id)).toMatchObject({ stage: "verify", status: "awaiting_review" });
+    // User rolls back (arm → gated execute → enqueue).
+    engStore.transition({ taskId: id, to: { stage: "rollback", status: "ready" }, actor: "user", ts: NOW });
+    engStore.transition({ taskId: id, to: { stage: "rollback", status: "in_progress" }, actor: "user", gateApproved: true, ts: NOW });
+    engStore.enqueue({ taskId: id, kind: "rollback", dedupeKey: `${id}:rollback` }, NOW);
+    await drain(worker);
+    expect(engStore.get(id)).toMatchObject({ stage: "rollback", status: "rolled_back" });
+    const rb = engStore.get(id)!.artifacts.rollback!;
+    expect(rb.targetSha).toBe("mergesha");
+    expect(rb.revertSha).toContain("revert-");
+    expect(rb.prUrl).toBeTruthy();
   });
 });

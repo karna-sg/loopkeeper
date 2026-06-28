@@ -108,6 +108,29 @@ export class GitWorkspace implements Workspace {
     return r.ok ? r.out.slice(0, 2000) : "";
   }
 
+  async revert(task: EngTask, sha: string): Promise<{ revertSha: string; branch: string }> {
+    const branch = `rollback/${task.jiraKey.toLowerCase()}-${sha.slice(0, 7)}`;
+    const path = join(this.#cfg.worktreeRoot, branch);
+    return this.#withLock(async () => {
+      await this.#ensureMirror();
+      if (!existsSync(path)) {
+        const base = `origin/${this.#cfg.defaultBranch}`;
+        const created = await this.#git(this.#cfg.mirrorDir, ["worktree", "add", "-b", branch, path, base]);
+        if (!created.ok) {
+          const attached = await this.#git(this.#cfg.mirrorDir, ["worktree", "add", path, branch]);
+          if (!attached.ok) throw new Error(`git worktree add (revert) failed: ${created.out.slice(-300)}`);
+        }
+      }
+      const ident = ["-c", `user.name=${this.#cfg.authorName}`, "-c", `user.email=${this.#cfg.authorEmail}`];
+      const rev = await this.#git(path, [...ident, "revert", "--no-edit", sha]);
+      if (!rev.ok) throw new Error(`git revert failed: ${rev.out.slice(-300)}`);
+      const push = await this.#git(path, ["push", "-u", "origin", branch], true);
+      if (!push.ok) throw new Error(`git push (revert) failed: ${push.out.slice(-300)}`);
+      const revertSha = (await this.#git(path, ["rev-parse", "HEAD"])).out.trim();
+      return { revertSha, branch };
+    });
+  }
+
   async remove(task: EngTask): Promise<void> {
     const branch = task.branch ?? branchNameFor(task.jiraKey, task.title);
     const path = task.worktreePath ?? join(this.#cfg.worktreeRoot, branch);

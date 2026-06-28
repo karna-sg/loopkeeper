@@ -18,6 +18,14 @@ function message(task: EngTask): { title: string; body: string } {
       return { title: `Ready to merge · ${tag}`, body: task.title };
     case "deploy:failed":
       return { title: `Deploy failed · ${tag}`, body: task.title };
+    case "verify:awaiting_review":
+      return { title: `Deployed — verify · ${tag}`, body: task.artifacts.verify?.changeSummary ?? task.title };
+    case "verify:failed":
+      return { title: `Post-deploy check failed · ${tag}`, body: task.title };
+    case "rollback:ready":
+      return { title: `Rollback ready · ${tag}`, body: task.title };
+    case "rollback:failed":
+      return { title: `Rollback failed · ${tag}`, body: task.title };
     default:
       return { title: `Action needed · ${tag}`, body: task.title };
   }
