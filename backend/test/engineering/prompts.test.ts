@@ -24,7 +24,7 @@ const baseTask = {
   claudeModel: null,
   stage: "pr" as const,
   status: "proposed" as const,
-  artifacts: { plan: null, dev: null, test: null, pr: null, review: null, merge: null, deploy: null, verify: null, rollback: null, acCheck: null },
+  artifacts: { plan: null, dev: null, test: null, pr: null, review: null, merge: null, deploy: null, verify: null, rollback: null, acCheck: null, jiraWriteback: null },
   budget: { maxIterations: 6, iterationsUsed: 0, maxUsdCents: 500, usdCentsUsed: 0, maxReviewRounds: 3, reviewRoundsUsed: 0 },
   lastNotifiedStatus: null,
   lastError: null,
