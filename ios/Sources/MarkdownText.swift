@@ -49,6 +49,8 @@ struct MarkdownText: View {
                     .font(.system(size: level <= 1 ? size + 2 : size + 1, weight: .bold, design: .monospaced))
                     .foregroundStyle(Theme.mdHeading)
                     .padding(.top, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             case let .bullet(t):
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Text("•").font(.system(size: size, design: .monospaced)).foregroundStyle(Theme.headerAccent)
@@ -57,6 +59,7 @@ struct MarkdownText: View {
                         .foregroundStyle(color)
                 }
                 .padding(.leading, 4)
+                .fixedSize(horizontal: false, vertical: true)
             case let .quote(t):
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Rectangle().fill(Theme.headerAccent.opacity(0.6)).frame(width: 2)
@@ -66,20 +69,28 @@ struct MarkdownText: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
             case let .code(t):
-                Text(t)
-                    .font(.system(size: size - 1, design: .monospaced))
-                    .foregroundStyle(Theme.mdCode)
-                    .padding(9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.mdCode.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(t)
+                        .font(.system(size: size - 1, design: .monospaced))
+                        .foregroundStyle(Theme.mdCode)
+                        .padding(9)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.mdCode.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
             case let .table(rows):
-                tableView(rows, size: size)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    tableView(rows, size: size)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             case .rule:
                 Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1).padding(.vertical, 4)
             case let .paragraph(t):
                 MarkdownText.inlineText(t, base: color)
                     .font(.system(size: size, design: .monospaced))
                     .foregroundStyle(color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             case .spacer:
                 Color.clear.frame(height: 4)
             }
@@ -105,8 +116,8 @@ struct MarkdownText: View {
                         .foregroundStyle(idx == 0 ? Theme.mdHeading : Color.primary)
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .padding(9)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 5))
         }
     }

@@ -33,7 +33,7 @@ struct TaskWorkspaceView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            ScrollView(.vertical) {
                 if let task {
                     VStack(alignment: .leading, spacing: 18) {
                         header(task)

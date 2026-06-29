@@ -82,10 +82,13 @@ struct DiffView: View {
 
             // Hunks — only when expanded
             if expanded {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
-                        hunkView(hunk)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
+                            hunkView(hunk)
+                        }
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.leading, 12)
             }
