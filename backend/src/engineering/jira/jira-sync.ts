@@ -134,6 +134,14 @@ export class JiraSyncService {
     const inputs = issues.map((i) => mapJiraIssue(i, this.#opts));
     const { inserted, updated } = this.#store.upsertFromJira(inputs, args.nowIso);
 
+    // An empty assignee result is almost always a transient/auth blip, not "everything unassigned".
+    // Reconciling against it would prune every not_started task and flag every in-flight one, so skip
+    // it. (A real mid-fetch HTTP error throws in searchAssigned and aborts before any mutation; a
+    // truncated multi-page result can no longer happen now that searchAssigned paginates.)
+    if (issues.length === 0) {
+      return { imported: inserted, updated, fetched: 0, pruned: 0, flagged: 0 };
+    }
+
     const liveJiraIds = new Set(issues.map((i) => i.id));
     const { pruned, flagged } = this.#store.reconcile(liveJiraIds, args.nowIso);
 
