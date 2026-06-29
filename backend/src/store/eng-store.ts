@@ -997,7 +997,10 @@ export class EngStore {
   }
 
   deleteLabel(id: string): void {
-    this.#db.prepare("DELETE FROM eng_labels WHERE id = ?").run(id);
+    this.#db.transaction(() => {
+      this.#db.prepare("DELETE FROM eng_task_labels WHERE label_id = ?").run(id);
+      this.#db.prepare("DELETE FROM eng_labels WHERE id = ?").run(id);
+    })();
   }
 
   // --- Label attach / detach / reorder ---
