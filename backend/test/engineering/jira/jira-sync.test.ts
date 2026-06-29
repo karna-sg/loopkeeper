@@ -89,15 +89,28 @@ describe("JiraSyncService", () => {
   });
 
   it("flags in-flight tasks dropped from Jira rather than deleting them", async () => {
-    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "OAuth")]), store, OPTS).run({ nowIso: NOW });
+    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "OAuth"), issue("LK-2", "Keep")]), store, OPTS).run({ nowIso: NOW });
     const id = store.getByKey("LK-1")!.id;
     store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
 
-    // LK-1 unassigned in Jira
-    const result = await new JiraSyncService(new FakeJiraClient([]), store, OPTS).run({ nowIso: NOW });
+    // LK-1 unassigned in Jira, but the result is non-empty (LK-2 still assigned) so reconcile runs.
+    const result = await new JiraSyncService(new FakeJiraClient([issue("LK-2", "Keep")]), store, OPTS).run({ nowIso: NOW });
     expect(result.pruned).toBe(0);
     expect(result.flagged).toBe(1);
     expect(store.get(id)?.lastError).toContain("no longer assigned");
+  });
+
+  it("empty assignee fetch is non-destructive: keeps not_started and in-flight tasks (no prune/flag)", async () => {
+    await new JiraSyncService(new FakeJiraClient([issue("LK-1", "OAuth"), issue("LK-2", "Worker")]), store, OPTS).run({ nowIso: NOW });
+    const id1 = store.getByKey("LK-1")!.id;
+    store.transition({ taskId: id1, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+
+    // Jira returns [] (transient/auth blip) — must NOT wipe the backlog (the prime symptom guard).
+    const result = await new JiraSyncService(new FakeJiraClient([]), store, OPTS).run({ nowIso: NOW });
+    expect(result).toEqual({ imported: 0, updated: 0, fetched: 0, pruned: 0, flagged: 0 });
+    expect(store.count()).toBe(2); // both survive
+    expect(store.get(id1)?.lastError ?? null).toBeNull(); // in-flight not flagged
+    expect(store.getByKey("LK-2")).not.toBeNull(); // not_started not pruned
   });
 
   it("listTasks: live Jira result left-joined with DB pipeline state", async () => {
