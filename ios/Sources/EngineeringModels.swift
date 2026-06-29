@@ -124,6 +124,14 @@ struct AcCheckItem: Codable, Hashable, Identifiable {
     var id: String { criterion ?? "" }
 }
 
+/// Opt-in advisory Jira comment (LP-66). Human-approved before post; stored as a DRAFT first.
+struct JiraWritebackArtifact: Codable, Hashable {
+    let draftBody: String?
+    let draftTs: String?
+    let postedTs: String?
+    let postedBy: String?
+}
+
 struct TaskArtifacts: Codable, Hashable {
     let plan: PlanArtifact?
     let dev: DevArtifact?
@@ -135,6 +143,7 @@ struct TaskArtifacts: Codable, Hashable {
     let verify: VerifyArtifact?
     let rollback: RollbackArtifact?
     let acCheck: [AcCheckItem]?
+    let jiraWriteback: JiraWritebackArtifact?
 }
 
 struct TaskBudget: Codable, Hashable {

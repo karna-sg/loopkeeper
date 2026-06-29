@@ -123,6 +123,8 @@ struct APIClient {
         _ = try await run(req)
     }
     func cancelTask(_ id: String) async throws { try await act("/tasks/\(id)/cancel") }
+    func jiraWritebackDraft(_ id: String) async throws { try await act("/tasks/\(id)/jira/writeback/draft") }
+    func jiraWritebackConfirm(_ id: String) async throws { try await act("/tasks/\(id)/jira/writeback/confirm") }
     func confirmVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/confirm") }
     func retryVerify(_ id: String) async throws { try await act("/tasks/\(id)/verify/retry") }
     func rollback(_ id: String) async throws { try await act("/tasks/\(id)/rollback") }

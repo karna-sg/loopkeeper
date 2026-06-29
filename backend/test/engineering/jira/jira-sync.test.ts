@@ -11,6 +11,7 @@ class FakeJiraClient implements JiraClient {
   callCount = 0;
   getCount = 0;
   throwOnGet = false;
+  comments: Array<{ issueIdOrKey: string; body: string }> = [];
   constructor(private issues: JiraIssue[]) {}
   async searchAssigned(): Promise<JiraIssue[]> {
     this.callCount++;
@@ -23,6 +24,9 @@ class FakeJiraClient implements JiraClient {
   }
   async currentUserAccountId(): Promise<string> {
     return "acct-1";
+  }
+  async addComment(issueIdOrKey: string, body: string): Promise<void> {
+    this.comments.push({ issueIdOrKey, body });
   }
 }
 

@@ -127,6 +127,11 @@ export class JiraSyncService {
     }
   }
 
+  /** Post a comment to a Jira issue (LP-66 write-back). Delegates to the underlying client. */
+  addComment(issueIdOrKey: string, body: string): Promise<void> {
+    return this.#client.addComment(issueIdOrKey, body);
+  }
+
   async run(args: { nowIso: string }): Promise<JiraSyncResult> {
     // Always fetch fresh for an explicit sync; warm the cache so subsequent listTasks() is fast.
     const issues = await this.#client.searchAssigned();
