@@ -979,7 +979,8 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
       }
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
     } finally {
-      await app.close(); // connections already closed above; resolves immediately
+      app.server.closeAllConnections(); // idempotent; ensures no lingering sockets block app.close()
+      await app.close();
     }
   });
 });

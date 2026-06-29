@@ -279,7 +279,8 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     let cleanup: () => void = () => {};
 
     // Heartbeat comment every 15s to keep proxies from closing the connection.
-    const heartbeat = setInterval(() => { res.write(": heartbeat\n\n"); }, 15_000);
+    // unref() so this timer doesn't prevent the event loop from draining when the server closes.
+    const heartbeat = setInterval(() => { res.write(": heartbeat\n\n"); }, 15_000).unref();
 
     // Forward transition events as SSE "status" events; close stream when terminal.
     const onTransition = (evt: { taskId: string; stage: string; status: string }): void => {
