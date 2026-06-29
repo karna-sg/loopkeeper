@@ -468,7 +468,7 @@ describe("EngStore: transitionEmitter (LP-71)", () => {
     const id = taskId("10001");
     // Advance to the plan gate: plan:not_started → plan:in_progress → plan:completed_unapproved
     store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
-    store.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "worker", ts: NOW });
+    store.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
 
     const received: unknown[] = [];
     store.transitionEmitter.on("transition", (evt) => received.push(evt));
