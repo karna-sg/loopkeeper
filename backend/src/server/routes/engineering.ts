@@ -270,6 +270,7 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     }
 
     // Declare cleanup first (with no-op default) so onTransition can safely reference it.
+    let cleaned = false;
     let cleanup: () => void = () => {};
 
     // Heartbeat comment every 15s to keep proxies from closing the connection.
@@ -288,12 +289,18 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     engStore.transitionEmitter.on("transition", onTransition);
 
     cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
       clearInterval(heartbeat);
       watcher?.close();
       engStore.transitionEmitter.off("transition", onTransition);
       if (!res.writableEnded) res.end();
+      // Destroy the socket so the TCP connection closes fully and app.close() doesn't wait on
+      // a keep-alive socket that would otherwise linger after the HTTP response is done.
+      res.socket?.destroy();
     };
-    res.on("close", cleanup);
+    // req.raw fires 'close' on client disconnect; res fires it when the response stream is done.
+    req.raw.on("close", cleanup);
   });
 
   // --- Jira sync (FR-2) ---
