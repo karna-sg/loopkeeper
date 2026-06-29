@@ -223,6 +223,11 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     let flushing = false;
     let pending = false;
 
+    // Capture the TCP socket early. req.raw (IncomingMessage for a body-less GET) has its
+    // readable side already "ended", so its own 'close' event can be delayed. Listening
+    // directly on the net.Socket gives an immediate notification when the connection drops.
+    const rawSocket = req.raw.socket;
+
     const sendData = (line: string): void => { res.write(`data: ${line}\n\n`); };
     const sendEvent = (type: string, data: string): void => { res.write(`event: ${type}\ndata: ${data}\n\n`); };
 
@@ -294,10 +299,15 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
       clearInterval(heartbeat);
       watcher?.close();
       engStore.transitionEmitter.off("transition", onTransition);
+      rawSocket?.off("close", cleanup);
       if (!res.writableEnded) res.end();
     };
-    // req.raw 'close' fires on client disconnect (more reliable than res 'close' for SSE).
-    req.raw.on("close", cleanup);
+    // Listen directly on the TCP socket for the most reliable disconnect notification.
+    if (rawSocket) {
+      rawSocket.on("close", cleanup);
+    } else {
+      req.raw.on("close", cleanup);
+    }
   });
 
   // --- Jira sync (FR-2) ---
