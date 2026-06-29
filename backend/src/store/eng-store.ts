@@ -8,6 +8,7 @@ import type {
   AgentRunStatus,
   DeployArtifact,
   EngJob,
+  EngLabel,
   EngTask,
   EngTaskInput,
   JobKind,
@@ -76,6 +77,17 @@ interface TaskRow {
   updated_ts: string;
 }
 
+interface LabelRow {
+  id: string;
+  name: string;
+  color: string;
+  created_ts: string;
+}
+
+function toLabel(r: LabelRow): EngLabel {
+  return { id: r.id, name: r.name, color: r.color, createdTs: r.created_ts };
+}
+
 function parseJson<T>(raw: string, fallback: T): T {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -90,7 +102,7 @@ function parseStringArray(raw: string): string[] {
   return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
 }
 
-function toTask(r: TaskRow): EngTask {
+function toTask(r: TaskRow, labelIds: string[] = []): EngTask {
   return {
     id: r.id,
     jiraKey: r.jira_key,
@@ -101,6 +113,7 @@ function toTask(r: TaskRow): EngTask {
     acceptanceCriteria: r.acceptance_criteria,
     labels: parseStringArray(r.labels),
     components: parseStringArray(r.components),
+    labelIds,
     assignee: r.assignee,
     jiraStatus: r.jira_status,
     repo: r.repo,
@@ -329,6 +342,21 @@ export class EngStore {
         log_path TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_eng_runs_task ON eng_agent_runs(task_id, started_ts);
+
+      CREATE TABLE IF NOT EXISTS eng_labels (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE,
+        color      TEXT NOT NULL,
+        created_ts TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS eng_task_labels (
+        label_id TEXT NOT NULL REFERENCES eng_labels(id) ON DELETE CASCADE,
+        jira_id  TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (label_id, jira_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_eng_task_labels_jira ON eng_task_labels(jira_id);
     `);
     // Post-deploy column additions — idempotent (columns already present in new CREATE TABLE above).
     for (const ddl of [
@@ -505,12 +533,14 @@ export class EngStore {
 
   get(id: string): EngTask | null {
     const row = this.#db.prepare("SELECT * FROM eng_tasks WHERE id = ?").get(id) as TaskRow | undefined;
-    return row ? toTask(row) : null;
+    if (!row) return null;
+    return toTask(row, this.#labelIdsForJiraId(row.jira_id));
   }
 
   getByKey(jiraKey: string): EngTask | null {
     const row = this.#db.prepare("SELECT * FROM eng_tasks WHERE jira_key = ?").get(jiraKey) as TaskRow | undefined;
-    return row ? toTask(row) : null;
+    if (!row) return null;
+    return toTask(row, this.#labelIdsForJiraId(row.jira_id));
   }
 
   list(filter: EngTaskFilter = {}): EngTask[] {
@@ -525,7 +555,9 @@ export class EngStore {
       params.stage = filter.stage;
     }
     const sql = "SELECT * FROM eng_tasks" + (where.length ? ` WHERE ${where.join(" AND ")}` : "") + " ORDER BY updated_ts DESC";
-    let tasks = (this.#db.prepare(sql).all(params) as TaskRow[]).map(toTask);
+    const rows = this.#db.prepare(sql).all(params) as TaskRow[];
+    const labelMap = this.#labelIdsByJiraIds(rows.map((r) => r.jira_id));
+    let tasks = rows.map((r) => toTask(r, labelMap.get(r.jira_id) ?? []));
     if (filter.needsHuman) {
       tasks = tasks.filter((t) => needsHuman({ stage: t.stage, status: t.status }));
     }
@@ -916,6 +948,87 @@ export class EngStore {
   /** Test/dev wipe. */
   reset(): void {
     this.#db.exec("DELETE FROM eng_tasks; DELETE FROM eng_events; DELETE FROM eng_jobs; DELETE FROM eng_agent_runs;");
+  }
+
+  // --- Label helpers (private) ---
+
+  #labelIdsForJiraId(jiraId: string): string[] {
+    const rows = this.#db
+      .prepare("SELECT label_id FROM eng_task_labels WHERE jira_id = ? ORDER BY position")
+      .all(jiraId) as { label_id: string }[];
+    return rows.map((r) => r.label_id);
+  }
+
+  #labelIdsByJiraIds(jiraIds: string[]): Map<string, string[]> {
+    if (jiraIds.length === 0) return new Map();
+    const placeholders = jiraIds.map(() => "?").join(",");
+    const rows = this.#db
+      .prepare(`SELECT jira_id, label_id FROM eng_task_labels WHERE jira_id IN (${placeholders}) ORDER BY position`)
+      .all(jiraIds) as { jira_id: string; label_id: string }[];
+    const map = new Map<string, string[]>();
+    for (const row of rows) {
+      if (!map.has(row.jira_id)) map.set(row.jira_id, []);
+      map.get(row.jira_id)!.push(row.label_id);
+    }
+    return map;
+  }
+
+  // --- Labels CRUD ---
+
+  createLabel(name: string, color: string): EngLabel {
+    const id = `lbl_${randomUUID()}`;
+    const ts = new Date().toISOString();
+    this.#db.prepare("INSERT INTO eng_labels (id, name, color, created_ts) VALUES (?, ?, ?, ?)").run(id, name, color, ts);
+    return { id, name, color, createdTs: ts };
+  }
+
+  listLabels(): EngLabel[] {
+    const rows = this.#db.prepare("SELECT * FROM eng_labels ORDER BY created_ts").all() as LabelRow[];
+    return rows.map(toLabel);
+  }
+
+  updateLabel(id: string, patch: { name?: string; color?: string }): EngLabel | null {
+    const row = this.#db.prepare("SELECT * FROM eng_labels WHERE id = ?").get(id) as LabelRow | undefined;
+    if (!row) return null;
+    const name = patch.name ?? row.name;
+    const color = patch.color ?? row.color;
+    this.#db.prepare("UPDATE eng_labels SET name = ?, color = ? WHERE id = ?").run(name, color, id);
+    return { id, name, color, createdTs: row.created_ts };
+  }
+
+  deleteLabel(id: string): void {
+    this.#db.prepare("DELETE FROM eng_labels WHERE id = ?").run(id);
+  }
+
+  // --- Label attach / detach / reorder ---
+
+  attachLabel(labelId: string, jiraId: string): void {
+    const existing = this.#db
+      .prepare("SELECT COALESCE(MAX(position), -1) AS maxPos FROM eng_task_labels WHERE label_id = ?")
+      .get(labelId) as { maxPos: number };
+    const position = existing.maxPos + 1;
+    this.#db
+      .prepare("INSERT OR IGNORE INTO eng_task_labels (label_id, jira_id, position) VALUES (?, ?, ?)")
+      .run(labelId, jiraId, position);
+  }
+
+  detachLabel(labelId: string, jiraId: string): void {
+    this.#db.prepare("DELETE FROM eng_task_labels WHERE label_id = ? AND jira_id = ?").run(labelId, jiraId);
+  }
+
+  reorderLabel(labelId: string, orderedJiraIds: string[]): void {
+    const update = this.#db.prepare("UPDATE eng_task_labels SET position = ? WHERE label_id = ? AND jira_id = ?");
+    this.#db.transaction(() => {
+      orderedJiraIds.forEach((jiraId, idx) => update.run(idx, labelId, jiraId));
+    })();
+  }
+
+  /** Returns jira_ids for a label in position order (used by the queue view). */
+  labelTaskOrder(labelId: string): string[] {
+    const rows = this.#db
+      .prepare("SELECT jira_id FROM eng_task_labels WHERE label_id = ? ORDER BY position")
+      .all(labelId) as { jira_id: string }[];
+    return rows.map((r) => r.jira_id);
   }
 
   close(): void {

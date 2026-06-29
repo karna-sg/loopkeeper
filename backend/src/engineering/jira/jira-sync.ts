@@ -72,6 +72,7 @@ export class JiraSyncService {
           acceptanceCriteria: mapped.acceptanceCriteria,
           labels: mapped.labels,
           components: mapped.components,
+          labelIds: [],
           assignee: mapped.assignee,
           jiraStatus: mapped.jiraStatus,
           repo: mapped.repo,
