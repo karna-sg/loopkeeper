@@ -171,6 +171,29 @@ enum Theme {
         f.dateStyle = .medium
         return f.string(from: d)
     }
+
+    // MARK: - Label colors
+
+    /// Trello-style palette for LoopKeeper label creation.
+    static let labelPalette: [(hex: String, name: String)] = [
+        ("#61BD4F", "Green"),
+        ("#F2D600", "Yellow"),
+        ("#FF9F1A", "Orange"),
+        ("#EB5A46", "Red"),
+        ("#C377E0", "Purple"),
+        ("#0079BF", "Blue"),
+        ("#00C2E0", "Sky"),
+    ]
+
+    /// Parse a 6-digit hex color string into a SwiftUI `Color`. Falls back to `.secondary`.
+    static func labelColor(_ hex: String) -> Color {
+        let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard h.count == 6, let rgb = UInt64(h, radix: 16) else { return .secondary }
+        let r = Double((rgb >> 16) & 0xFF) / 255
+        let g = Double((rgb >> 8)  & 0xFF) / 255
+        let b = Double(rgb & 0xFF)          / 255
+        return Color(red: r, green: g, blue: b)
+    }
 }
 
 /// Light wrappers around UIKit feedback generators so action handlers can confirm a tap by touch.

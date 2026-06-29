@@ -964,7 +964,7 @@ export class EngStore {
     const placeholders = jiraIds.map(() => "?").join(",");
     const rows = this.#db
       .prepare(`SELECT jira_id, label_id FROM eng_task_labels WHERE jira_id IN (${placeholders}) ORDER BY position`)
-      .all(jiraIds) as { jira_id: string; label_id: string }[];
+      .all(...(jiraIds as unknown[])) as { jira_id: string; label_id: string }[];
     const map = new Map<string, string[]>();
     for (const row of rows) {
       if (!map.has(row.jira_id)) map.set(row.jira_id, []);

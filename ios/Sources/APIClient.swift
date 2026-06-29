@@ -134,6 +134,56 @@ struct APIClient {
         _ = try await run(req)
     }
 
+    // MARK: - Labels (LoopKeeper-side, distinct from Jira read-only labels)
+
+    func labels() async throws -> [EngLabel] {
+        let r: LabelsResponse = try await getJSON("/labels")
+        return r.labels
+    }
+
+    func createLabel(name: String, color: String) async throws -> EngLabel {
+        var req = makeRequest("/labels", method: "POST", json: true)
+        req.httpBody = try JSONEncoder().encode(["name": name, "color": color])
+        let r: LabelResponse = try JSONDecoder().decode(LabelResponse.self, from: try await run(req))
+        return r.label
+    }
+
+    func updateLabel(id: String, name: String? = nil, color: String? = nil) async throws -> EngLabel {
+        var req = makeRequest("/labels/\(id)", method: "PATCH", json: true)
+        var body: [String: String] = [:]
+        if let name { body["name"] = name }
+        if let color { body["color"] = color }
+        req.httpBody = try JSONEncoder().encode(body)
+        let r: LabelResponse = try JSONDecoder().decode(LabelResponse.self, from: try await run(req))
+        return r.label
+    }
+
+    func deleteLabel(id: String) async throws {
+        _ = try await run(makeRequest("/labels/\(id)", method: "DELETE", json: false))
+    }
+
+    func attachLabel(taskId: String, labelId: String) async throws {
+        var req = makeRequest("/tasks/\(taskId)/labels", method: "POST", json: true)
+        req.httpBody = try JSONEncoder().encode(["labelId": labelId])
+        _ = try await run(req)
+    }
+
+    func detachLabel(taskId: String, labelId: String) async throws {
+        _ = try await run(makeRequest("/tasks/\(taskId)/labels/\(labelId)", method: "DELETE", json: false))
+    }
+
+    func labelOrder(_ labelId: String) async throws -> [String] {
+        struct Response: Decodable { let jiraIds: [String] }
+        let r: Response = try await getJSON("/labels/\(labelId)/order")
+        return r.jiraIds
+    }
+
+    func reorderLabel(labelId: String, jiraIds: [String]) async throws {
+        var req = makeRequest("/labels/\(labelId)/order", method: "PUT", json: true)
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["jiraIds": jiraIds])
+        _ = try await run(req)
+    }
+
     // MARK: - transport
 
     private func makeRequest(_ path: String, method: String, json: Bool) -> URLRequest {

@@ -298,3 +298,135 @@ describe("EngStore: cancel pending", () => {
     expect(store.isTaskCancelPending("unknown")).toBe(false);
   });
 });
+
+describe("EngStore: labels", () => {
+  let store: EngStore;
+  beforeEach(() => {
+    store = new EngStore(":memory:");
+  });
+
+  it("creates and lists labels", () => {
+    const lbl = store.createLabel("P0", "#EB5A46");
+    expect(lbl.id).toMatch(/^lbl_/);
+    expect(lbl.name).toBe("P0");
+    expect(lbl.color).toBe("#EB5A46");
+
+    const list = store.listLabels();
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(lbl.id);
+  });
+
+  it("updateLabel patches name and color", () => {
+    const lbl = store.createLabel("P0", "#EB5A46");
+    const updated = store.updateLabel(lbl.id, { name: "P1", color: "#61BD4F" });
+    expect(updated?.name).toBe("P1");
+    expect(updated?.color).toBe("#61BD4F");
+    expect(store.listLabels()[0].name).toBe("P1");
+  });
+
+  it("updateLabel returns null for unknown id", () => {
+    expect(store.updateLabel("unknown", { name: "X" })).toBeNull();
+  });
+
+  it("deleteLabel cascades to eng_task_labels", () => {
+    store.upsertFromJira([input()], NOW);
+    const task = store.getByKey("LK-1")!;
+    const lbl = store.createLabel("P0", "#EB5A46");
+    store.attachLabel(lbl.id, task.jiraId);
+    expect(store.get(task.id)!.labelIds).toContain(lbl.id);
+
+    store.deleteLabel(lbl.id);
+    expect(store.listLabels()).toHaveLength(0);
+    expect(store.get(task.id)!.labelIds).toHaveLength(0);
+  });
+
+  it("name uniqueness constraint throws on duplicate", () => {
+    store.createLabel("P0", "#EB5A46");
+    expect(() => store.createLabel("P0", "#61BD4F")).toThrow();
+  });
+
+  it("attachLabel appends at max(position)+1, idempotent on duplicate", () => {
+    store.upsertFromJira(
+      [input({ jiraKey: "LK-1", jiraId: "10001" }), input({ jiraKey: "LK-2", jiraId: "10002" })],
+      NOW,
+    );
+    const t1 = store.getByKey("LK-1")!;
+    const t2 = store.getByKey("LK-2")!;
+    const lbl = store.createLabel("Sprint", "#0079BF");
+
+    store.attachLabel(lbl.id, t1.jiraId);
+    store.attachLabel(lbl.id, t2.jiraId);
+    store.attachLabel(lbl.id, t1.jiraId); // duplicate — INSERT OR IGNORE is a no-op
+
+    const order = store.labelTaskOrder(lbl.id);
+    expect(order).toEqual([t1.jiraId, t2.jiraId]);
+    expect(store.get(t1.id)!.labelIds).toContain(lbl.id);
+    expect(store.get(t2.id)!.labelIds).toContain(lbl.id);
+  });
+
+  it("detachLabel removes the attachment", () => {
+    store.upsertFromJira([input()], NOW);
+    const task = store.getByKey("LK-1")!;
+    const lbl = store.createLabel("P0", "#EB5A46");
+    store.attachLabel(lbl.id, task.jiraId);
+    store.detachLabel(lbl.id, task.jiraId);
+    expect(store.get(task.id)!.labelIds).toHaveLength(0);
+    expect(store.labelTaskOrder(lbl.id)).toHaveLength(0);
+  });
+
+  it("reorderLabel updates positions and labelTaskOrder reflects new order", () => {
+    store.upsertFromJira(
+      [
+        input({ jiraKey: "LK-1", jiraId: "10001" }),
+        input({ jiraKey: "LK-2", jiraId: "10002" }),
+        input({ jiraKey: "LK-3", jiraId: "10003" }),
+      ],
+      NOW,
+    );
+    const lbl = store.createLabel("Sprint", "#0079BF");
+    store.attachLabel(lbl.id, "10001");
+    store.attachLabel(lbl.id, "10002");
+    store.attachLabel(lbl.id, "10003");
+
+    store.reorderLabel(lbl.id, ["10003", "10001", "10002"]);
+    expect(store.labelTaskOrder(lbl.id)).toEqual(["10003", "10001", "10002"]);
+  });
+
+  it("list() populates labelIds on all tasks in one query", () => {
+    store.upsertFromJira(
+      [input({ jiraKey: "LK-1", jiraId: "10001" }), input({ jiraKey: "LK-2", jiraId: "10002" })],
+      NOW,
+    );
+    const lbl1 = store.createLabel("P0", "#EB5A46");
+    const lbl2 = store.createLabel("P1", "#61BD4F");
+    store.attachLabel(lbl1.id, "10001");
+    store.attachLabel(lbl2.id, "10001");
+    store.attachLabel(lbl2.id, "10002");
+
+    const tasks = store.list();
+    const t1 = tasks.find((t) => t.jiraId === "10001")!;
+    const t2 = tasks.find((t) => t.jiraId === "10002")!;
+    expect(t1.labelIds).toContain(lbl1.id);
+    expect(t1.labelIds).toContain(lbl2.id);
+    expect(t2.labelIds).toContain(lbl2.id);
+    expect(t2.labelIds).not.toContain(lbl1.id);
+  });
+
+  it("labelIds survive a Jira re-sync / key rename", () => {
+    store.upsertFromJira([input({ jiraKey: "LK-1", jiraId: "10001" })], NOW);
+    const lbl = store.createLabel("Track", "#0079BF");
+    store.attachLabel(lbl.id, "10001");
+
+    store.upsertFromJira([input({ jiraKey: "LP-1", jiraId: "10001" })], NOW);
+
+    const task = store.getByKey("LP-1")!;
+    expect(task.jiraKey).toBe("LP-1");
+    expect(task.labelIds).toContain(lbl.id);
+  });
+
+  it("tasks with no labels get labelIds: []", () => {
+    store.upsertFromJira([input()], NOW);
+    const task = store.get(taskId("10001"))!;
+    expect(task.labelIds).toEqual([]);
+  });
+});
