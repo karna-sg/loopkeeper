@@ -6,6 +6,9 @@ struct ContentView: View {
     @AppStorage("loopkeeper.sortByPriority") private var sortByPriority = false
     /// Comma-separated keys of sections the user has collapsed (persisted).
     @AppStorage("loopkeeper.collapsedSections") private var collapsedCSV = ""
+    @AppStorage("loopkeeper.filterStage")  private var filterStage   = "all"
+    @AppStorage("loopkeeper.filterStatus") private var filterStatus  = "any"
+    @AppStorage("loopkeeper.filterTags")   private var filterTagsCSV = ""
     @State private var selected: OpenLoop?
     @State private var selectedTask: EngTask?
     @State private var searchText = ""
@@ -121,6 +124,76 @@ struct ContentView: View {
         }
     }
 
+    // MARK: task filter
+
+    private var filterTagsSet: Set<String> {
+        Set(filterTagsCSV.split(separator: ",").map(String.init).filter { !$0.isEmpty })
+    }
+
+    private var filteredSortedTasks: [EngTask] {
+        applyTaskFilters(model.sortedTasks, filter: TaskFilterState(
+            stage: filterStage,
+            statusGroup: filterStatus,
+            tags: filterTagsSet
+        ))
+    }
+
+    private var availableTags: [String] { availableTaskTags(model.engineeringTasks) }
+
+    private var hasActiveFilters: Bool {
+        filterStage != "all" || filterStatus != "any" || !filterTagsCSV.isEmpty
+    }
+
+    private func toggleTag(_ tag: String) {
+        var tags = filterTagsSet
+        if tags.contains(tag) { tags.remove(tag) } else { tags.insert(tag) }
+        filterTagsCSV = tags.sorted().joined(separator: ",")
+    }
+
+    private var taskFilterMenu: some View {
+        Menu {
+            Picker("Stage", selection: $filterStage) {
+                Text("all stages").tag("all")
+                ForEach(engStages, id: \.self) { Text($0).tag($0) }
+            }
+            Picker("Status", selection: $filterStatus) {
+                Text("any status").tag("any")
+                Text("needs you").tag("needs-you")
+                Text("running").tag("running")
+                Text("blocked").tag("blocked")
+                Text("done").tag("done")
+            }
+            if !availableTags.isEmpty {
+                Divider()
+                Section("Tags") {
+                    ForEach(availableTags, id: \.self) { tag in
+                        Button { toggleTag(tag) } label: {
+                            if filterTagsSet.contains(tag) {
+                                Label(tag, systemImage: "checkmark")
+                            } else {
+                                Text(tag)
+                            }
+                        }
+                    }
+                }
+            }
+            if hasActiveFilters {
+                Divider()
+                Button("clear filters", role: .destructive) {
+                    filterStage   = "all"
+                    filterStatus  = "any"
+                    filterTagsCSV = ""
+                }
+            }
+        } label: {
+            Image(systemName: hasActiveFilters
+                ? "line.3.horizontal.decrease.circle.fill"
+                : "line.3.horizontal.decrease.circle")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.headerAccent)
+        }
+    }
+
     // MARK: content states
 
     @ViewBuilder private var content: some View {
@@ -174,15 +247,17 @@ struct ContentView: View {
             if !model.engineeringTasks.isEmpty || model.jiraConnected {
                 Section {
                     if !isCollapsed("tasks") {
-                        ForEach(model.sortedTasks) { task in
+                        ForEach(filteredSortedTasks) { task in
                             JiraTaskRow(task: task)
                                 .listRowSeparator(.visible)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                                 .contentShape(Rectangle())
                                 .onTapGesture { Haptics.tap(); selectedTask = task }
                         }
-                        if model.engineeringTasks.isEmpty {
-                            Text(model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira")
+                        if filteredSortedTasks.isEmpty {
+                            Text(hasActiveFilters
+                                ? "no tasks match — clear filters"
+                                : (model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira"))
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
@@ -323,6 +398,7 @@ struct ContentView: View {
     /// this `[ sync ]` button is the one control that pulls newly-assigned tickets from Jira.
     @ViewBuilder
     private var tasksHeader: some View {
+        let badgeCount = filteredSortedTasks.filter(\.needsAction).count
         HStack(spacing: 8) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { toggleCollapsed("tasks") }
@@ -332,8 +408,8 @@ struct ContentView: View {
                     Text("# tasks")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.headerAccent)
-                    if model.tasksNeedingAction > 0 {
-                        Text("\(model.tasksNeedingAction) need you")
+                    if badgeCount > 0 {
+                        Text("\(badgeCount) need you")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.orange)
                     }
@@ -342,6 +418,12 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             Spacer()
+            if filterStage != "all" {
+                Text("[\(filterStage)]")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Theme.headerAccent)
+            }
+            taskFilterMenu
             Button { Task { await model.syncTasks() } } label: {
                 HStack(spacing: 5) {
                     if model.isSyncingTasks {
