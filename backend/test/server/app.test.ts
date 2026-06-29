@@ -948,43 +948,25 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
     // Pre-advance so the task is cancellable from in_progress.
     engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
 
-    await app.listen({ port: 0, host: "127.0.0.1" });
-    const port = (app.server.address() as { port: number }).port;
-    try {
-      expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
+    expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
 
-      // agent:false adds "Connection: close" to the request, so the server closes the TCP socket
-      // after res.end() instead of returning it to the keep-alive pool. Without this, app.close()
-      // would wait indefinitely for the idle keep-alive socket to drain.
-      await new Promise<void>((resolve) => {
-        const req = http.request(
-          { hostname: "127.0.0.1", port, path: `/tasks/${id}/stream`, agent: false },
-          (res) => {
-            res.resume(); // drain so the server write side never stalls
-            resolve(); // headers received — server handler is executing
-          },
-        );
-        req.on("error", () => {}); // swallow errors emitted when the server closes the socket
-        req.end();
-      });
+    // Use inject rather than a real server to avoid app.close() hanging on the keep-alive socket
+    // that remains after res.end() in cleanup(). The inject Promise stays pending until cleanup()
+    // calls res.end(), which happens when we fire a terminal transition below.
+    const injectPromise = app.inject({ method: "GET", url: `/tasks/${id}/stream` });
 
-      // Poll until the emitter listener is registered.
-      const deadline = Date.now() + 1000;
-      while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
-
-      // Fire a terminal transition: onTransition() calls cleanup() synchronously, which removes
-      // the listener and closes the watcher. This is the same cleanup() that the socket 'close'
-      // event triggers on client disconnect — both paths lead to the same function.
-      engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
-
-      // cleanup() is synchronous here — no await needed.
-      expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
-    } finally {
-      app.server.closeAllConnections();
-      await app.close();
+    // Poll until the async route handler has completed its setup and registered the listener.
+    const deadline = Date.now() + 1000;
+    while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
     }
+    expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
+
+    // Terminal transition → onTransition() → cleanup() → res.end() → inject resolves.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+
+    await injectPromise; // completes because cleanup() called res.end()
+
+    expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
   });
 });
