@@ -101,6 +101,7 @@ export class ClaudeAgentRunner implements AgentRunner {
       numTurns: parsed.numTurns,
       exitCode: proc.code,
       timedOut: proc.timedOut,
+      logPath,
       ...(ok ? {} : { error: redactSecrets((proc.stderr || parsed.finalText || "agent run failed").slice(-500)) }),
     };
   }

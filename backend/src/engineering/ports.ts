@@ -17,6 +17,8 @@ export interface AgentRunResult {
   exitCode: number | null;
   timedOut: boolean;
   error?: string;
+  /** Absolute path to the JSONL activity log written during this run. Null if logging is disabled. */
+  logPath?: string | null;
 }
 
 export interface AgentRunArgs {
