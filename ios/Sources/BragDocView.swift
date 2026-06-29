@@ -12,20 +12,31 @@ struct BragDocView: View {
         NavigationStack {
             ScrollView {
                 Text(text)
-                    .font(.callout)
+                    .font(.mono)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
-            .navigationTitle("Brag doc")
+            .background(Theme.terminalBG.ignoresSafeArea())
+            .navigationTitle("brag doc")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { if ready { ShareLink(item: text) } }
+                ToolbarItem(placement: .topBarLeading) {
+                    TerminalDoneButton { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if ready {
+                        ShareLink(item: text) {
+                            Text("[ share ]")
+                                .font(.mono)
+                                .foregroundStyle(Theme.headerAccent)
+                        }
+                    }
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 Text("Last 90 days of closed loops, grouped by who. Copy or share into your review doc.")
-                    .font(.caption2).foregroundStyle(.secondary).padding(.bottom, 8)
+                    .font(.monoSmall).foregroundStyle(.tertiary).padding(.bottom, 8)
             }
         }
         .task { text = await model.bragDocText(); ready = true }

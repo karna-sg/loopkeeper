@@ -24,38 +24,63 @@ struct WeeklyReviewView: View {
             List {
                 Section {
                     Text("Your week in loops. Celebrate what shipped, clear what's overdue, chase what's gone quiet.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.mono).foregroundStyle(.secondary)
                 }
-                Section("Shipped this week (\(shipped.count))") {
+                .listRowBackground(Color.clear)
+
+                Section {
                     if loading {
                         ProgressView()
                     } else if shipped.isEmpty {
-                        Text("Nothing closed in the last 7 days.").foregroundStyle(.secondary)
+                        Text("Nothing closed in the last 7 days.")
+                            .font(.mono).foregroundStyle(.secondary)
                     } else {
                         ForEach(shipped) { loop in
-                            Label(loop.summary, systemImage: "checkmark.circle.fill").labelStyle(.titleAndIcon)
-                        }
-                    }
-                }
-                if !overdue.isEmpty {
-                    Section("Still overdue (\(overdue.count))") {
-                        ForEach(overdue) { loop in actionRow(loop) }
-                    }
-                }
-                if !stale.isEmpty {
-                    Section("Waiting too long (\(stale.count))") {
-                        ForEach(stale) { loop in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(loop.summary).lineLimit(2)
-                                if !loop.counterpart.isEmpty { Text("Waiting on \(loop.counterpart)").font(.caption).foregroundStyle(.secondary) }
+                            HStack(spacing: 8) {
+                                Text("✓").font(.mono).foregroundStyle(.green)
+                                Text(loop.summary).font(.mono).lineLimit(2)
                             }
                         }
                     }
+                } header: {
+                    TerminalSectionHeader("# shipped_this_week  \(shipped.count)")
+                }
+                .listRowBackground(Color.clear)
+
+                if !overdue.isEmpty {
+                    Section {
+                        ForEach(overdue) { loop in actionRow(loop) }
+                    } header: {
+                        TerminalSectionHeader("# still_overdue  \(overdue.count)")
+                    }
+                    .listRowBackground(Color.clear)
+                }
+
+                if !stale.isEmpty {
+                    Section {
+                        ForEach(stale) { loop in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(loop.summary).font(.mono).lineLimit(2)
+                                if !loop.counterpart.isEmpty {
+                                    Text("waiting on \(loop.counterpart)")
+                                        .font(.monoSmall).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    } header: {
+                        TerminalSectionHeader("# waiting_too_long  \(stale.count)")
+                    }
+                    .listRowBackground(Color.clear)
                 }
             }
-            .navigationTitle("Weekly review")
+            .terminalListBackground()
+            .navigationTitle("weekly review")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
+            }
             .task {
                 let iso = ISO8601DateFormatter()
                 let cutoff = Date().addingTimeInterval(-7 * 86_400)
@@ -71,11 +96,14 @@ struct WeeklyReviewView: View {
     private func actionRow(_ loop: OpenLoop) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             LoopRow(loop: loop)
-            HStack(spacing: 8) {
-                Button { Task { await model.markDone(loop) } } label: { Label("Done", systemImage: "checkmark") }.tint(.green)
-                Button { Task { await model.snooze(loop, days: 1) } } label: { Label("Tomorrow", systemImage: "clock") }.tint(.orange)
+            HStack(spacing: 16) {
+                TerminalActionButton(title: "done", tint: .green) {
+                    Task { await model.markDone(loop) }
+                }
+                TerminalActionButton(title: "tomorrow", tint: .orange) {
+                    Task { await model.snooze(loop, days: 1) }
+                }
             }
-            .buttonStyle(.bordered).controlSize(.small)
         }
     }
 }

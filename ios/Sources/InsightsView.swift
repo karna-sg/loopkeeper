@@ -13,52 +13,68 @@ struct InsightsView: View {
             List {
                 if loading {
                     HStack { Spacer(); ProgressView(); Spacer() }
+                        .listRowBackground(Color.clear)
                 } else if let stats {
                     content(stats)
                 } else {
                     ContentUnavailableView("No insights", systemImage: "chart.bar", description: Text("Couldn't load stats — check the connection."))
+                        .listRowBackground(Color.clear)
                 }
             }
-            .navigationTitle("Insights")
+            .terminalListBackground()
+            .navigationTitle("insights")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
+            }
             .task { stats = await model.stats(); loading = false }
         }
     }
 
     @ViewBuilder private func content(_ s: Stats) -> some View {
-        Section("Reliability") {
-            LabeledContent("On-time rate", value: s.onTimeRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "—")
-            LabeledContent("On-time streak", value: "\(s.onTimeStreak)")
-            LabeledContent("Median time to close", value: s.medianTimeToCloseHours.map(humanHours) ?? "—")
-            LabeledContent("Carry-over (owe > 7d)") { Text("\(s.carryOver)").foregroundStyle(s.carryOver > 0 ? .orange : .secondary) }
+        Section {
+            TerminalStatRow(label: "on-time rate", value: s.onTimeRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "—")
+            TerminalStatRow(label: "on-time streak", value: "\(s.onTimeStreak)")
+            TerminalStatRow(label: "median time to close", value: s.medianTimeToCloseHours.map(humanHours) ?? "—")
+            TerminalStatRow(label: "carry-over (owe > 7d)", value: "\(s.carryOver)",
+                            valueTint: s.carryOver > 0 ? .orange : .primary)
+        } header: {
+            TerminalSectionHeader("# reliability")
         }
-        Section("Open now") {
-            LabeledContent("You owe", value: "\(s.open.owe)")
-            LabeledContent("Waiting on others", value: "\(s.open.owed)")
-            LabeledContent("Overdue") { Text("\(s.open.overdue)").foregroundStyle(s.open.overdue > 0 ? .red : .secondary) }
+        .listRowBackground(Color.clear)
+
+        Section {
+            TerminalStatRow(label: "you owe", value: "\(s.open.owe)")
+            TerminalStatRow(label: "waiting on others", value: "\(s.open.owed)")
+            TerminalStatRow(label: "overdue", value: "\(s.open.overdue)",
+                            valueTint: s.open.overdue > 0 ? .red : .primary)
+        } header: {
+            TerminalSectionHeader("# open_now")
         }
-        Section("Shipped") {
-            LabeledContent("Closed (all time)", value: "\(s.closed.total)")
-            LabeledContent("Last 7 days", value: "\(s.closed.last7)")
-            LabeledContent("Last 30 days", value: "\(s.closed.last30)")
-            LabeledContent("Dismissed", value: "\(s.dismissed.total)")
+        .listRowBackground(Color.clear)
+
+        Section {
+            TerminalStatRow(label: "closed (all time)", value: "\(s.closed.total)")
+            TerminalStatRow(label: "last 7 days", value: "\(s.closed.last7)")
+            TerminalStatRow(label: "last 30 days", value: "\(s.closed.last30)")
+            TerminalStatRow(label: "dismissed", value: "\(s.dismissed.total)")
+        } header: {
+            TerminalSectionHeader("# shipped")
         }
+        .listRowBackground(Color.clear)
+
         if !s.byWeek.isEmpty {
-            Section("Closed per week") {
+            Section {
                 let peak = max(s.byWeek.map(\.closed).max() ?? 1, 1)
                 ForEach(s.byWeek) { w in
-                    HStack(spacing: 8) {
-                        Text(w.week).font(.caption).foregroundStyle(.secondary).frame(width: 78, alignment: .leading)
-                        GeometryReader { geo in
-                            Capsule().fill(.tint)
-                                .frame(width: max(6, geo.size.width * CGFloat(w.closed) / CGFloat(peak)))
-                        }
-                        .frame(height: 10)
-                        Text("\(w.closed)").font(.caption).monospacedDigit()
-                    }
+                    TerminalBarRow(label: w.week, value: w.closed, peak: peak)
                 }
+            } header: {
+                TerminalSectionHeader("# closed_per_week")
             }
+            .listRowBackground(Color.clear)
         }
     }
 
