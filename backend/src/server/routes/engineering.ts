@@ -295,11 +295,8 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
       watcher?.close();
       engStore.transitionEmitter.off("transition", onTransition);
       if (!res.writableEnded) res.end();
-      // Destroy the socket so the TCP connection closes fully and app.close() doesn't wait on
-      // a keep-alive socket that would otherwise linger after the HTTP response is done.
-      res.socket?.destroy();
     };
-    // req.raw fires 'close' on client disconnect; res fires it when the response stream is done.
+    // req.raw 'close' fires on client disconnect (more reliable than res 'close' for SSE).
     req.raw.on("close", cleanup);
   });
 

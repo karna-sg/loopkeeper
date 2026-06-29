@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as http from "node:http";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -867,21 +868,30 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
     const port = (app.server.address() as { port: number }).port;
     try {
-      const ac = new AbortController();
-      const res = await fetch(`http://127.0.0.1:${port}/tasks/${id}/stream`, { signal: ac.signal });
-      expect(res.headers.get("content-type")).toContain("text/event-stream");
-
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let collected = "";
-      while (!collected.includes("data: text: Planning.")) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        collected += decoder.decode(value);
-      }
-      ac.abort();
-      expect(collected).toContain("data: text: Planning.");
+      const { contentType, body } = await new Promise<{ contentType: string; body: string }>((resolve, reject) => {
+        const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
+          const ct = res.headers["content-type"] ?? "";
+          let data = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            data += chunk;
+            if (data.includes("data: text: Planning.")) {
+              resolve({ contentType: ct, body: data });
+              req.destroy(); // disconnect after we have what we need
+            }
+          });
+          res.on("end", () => resolve({ contentType: ct, body: data }));
+          res.on("error", (err) => reject(err));
+        });
+        req.on("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code !== "ECONNRESET") reject(err);
+        });
+        req.end();
+      });
+      expect(contentType).toContain("text/event-stream");
+      expect(body).toContain("data: text: Planning.");
     } finally {
+      app.server.closeAllConnections();
       await app.close();
     }
   });
@@ -896,25 +906,37 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
     const port = (app.server.address() as { port: number }).port;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/tasks/${id}/stream`);
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-
-      // Fire a transition after connecting
-      setTimeout(() => {
-        engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
-      }, 20);
-
-      let collected = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break; // Server closed the stream after the terminal transition
-        collected += decoder.decode(value);
-      }
+      // Use http.request (not fetch) so we get direct socket control and reliable close detection.
+      const collected = await new Promise<string>((resolve, reject) => {
+        let data = "";
+        const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            data += chunk;
+            if (data.includes('"status":"cancelled"')) {
+              resolve(data);
+              req.destroy(); // client disconnect after collecting the event
+            }
+          });
+          res.on("end", () => resolve(data)); // server closed cleanly
+          res.on("error", (err) => reject(err));
+        });
+        // ECONNRESET is expected when cleanup() destroys the socket after sending the event.
+        req.on("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code === "ECONNRESET") resolve(data);
+          else reject(err);
+        });
+        // Fire a terminal transition 20ms after the connection is established.
+        setTimeout(() => {
+          engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+        }, 20);
+        req.end();
+      });
 
       expect(collected).toContain("event: status");
       expect(collected).toContain('"status":"cancelled"');
     } finally {
+      app.server.closeAllConnections();
       await app.close();
     }
   });
@@ -929,30 +951,37 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
     try {
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
 
-      const ac = new AbortController();
-      const res = await fetch(`http://127.0.0.1:${port}/tasks/${id}/stream`, { signal: ac.signal });
-      const reader = res.body!.getReader();
-      // Kick off reading so the connection is fully established server-side.
-      const firstRead = reader.read();
+      // Use http.request so req.destroy() immediately closes the TCP socket, giving the server
+      // a reliable 'close' event (AbortController + undici can delay that notification).
+      let destroyClient: (() => void) | undefined;
+      await new Promise<void>((resolve) => {
+        const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
+          res.resume(); // drain to prevent backpressure stalling the server
+          resolve(); // headers received = server-side handler is running
+        });
+        req.on("error", () => {}); // swallow ECONNRESET on destroy()
+        req.end();
+        destroyClient = () => req.destroy();
+      });
 
-      // Poll until the listener is registered (the server awaits flushNewLines before attaching it).
+      // Poll until the emitter listener is registered.
       const deadline = Date.now() + 1000;
       while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
 
-      // Disconnect the client.
-      ac.abort();
-      await firstRead.catch(() => {});
+      // Destroy the socket — this delivers an immediate TCP RST to the server.
+      destroyClient?.();
 
-      // Wait for server-side cleanup.
+      // Wait for the server's req.raw 'close' handler to remove the listener.
       const cleanupDeadline = Date.now() + 1000;
       while (engStore.transitionEmitter.listenerCount("transition") > 0 && Date.now() < cleanupDeadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
     } finally {
+      app.server.closeAllConnections();
       await app.close();
     }
   });
