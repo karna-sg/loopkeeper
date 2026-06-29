@@ -148,6 +148,7 @@ export class Orchestrator {
       numTurns: run.numTurns,
       resultSummary: truncate(run.finalText, 200),
       sessionId: run.sessionId,
+      logPath: run.logPath,
       ...(run.error ? { error: run.error } : {}),
     });
     if (run.sessionId !== sessionId) engStore.setClaudeSession(taskId, run.sessionId, now());
@@ -192,6 +193,7 @@ export class Orchestrator {
         numTurns: run.numTurns,
         resultSummary: truncate(run.finalText, 200),
         sessionId: run.sessionId,
+        logPath: run.logPath,
         ...(run.error ? { error: run.error } : {}),
       });
       if (run.sessionId !== sessionId) {
@@ -292,6 +294,7 @@ export class Orchestrator {
       numTurns: run.numTurns,
       resultSummary: truncate(run.finalText, 200),
       sessionId: run.sessionId,
+      logPath: run.logPath,
       ...(run.error ? { error: run.error } : {}),
     });
     if (run.sessionId !== sessionId) engStore.setClaudeSession(taskId, run.sessionId, now());
