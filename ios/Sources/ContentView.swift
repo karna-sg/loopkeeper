@@ -21,6 +21,9 @@ struct ContentView: View {
     @State private var showWeekly = false
     @State private var showBragDoc = false
     @State private var showEngInsights = false
+    @State private var showLabels = false
+    @State private var labelPickerTask: EngTask?
+    @AppStorage("loopkeeper.queueLabelId") private var queueLabelId = ""
 
     var body: some View {
         @Bindable var model = model
@@ -29,7 +32,11 @@ struct ContentView: View {
                 warningBanner
                 content
                     .refreshable { await model.refresh() }
-                    .task { await model.refresh(); model.autoSyncTasksIfNeeded() }
+                    .task {
+                        await model.refresh()
+                        model.autoSyncTasksIfNeeded()
+                        if !queueLabelId.isEmpty { await model.loadLabelOrder(queueLabelId) }
+                    }
                     .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search loops")
                     .onChange(of: searchText) { _, q in
                         Task { searchResults = q.trimmingCharacters(in: .whitespaces).isEmpty ? [] : await model.search(q) }
@@ -44,6 +51,8 @@ struct ContentView: View {
                     .sheet(isPresented: $showWeekly) { WeeklyReviewView() }
                     .sheet(isPresented: $showBragDoc) { BragDocView() }
                     .sheet(isPresented: $showEngInsights) { EngInsightsView() }
+                    .sheet(isPresented: $showLabels) { LabelsView() }
+                    .sheet(item: $labelPickerTask) { LabelPickerView(task: $0) }
                     .onReceive(NotificationCenter.default.publisher(for: .loopkeeperDidMutate)) { _ in
                         Task { await model.refresh() }
                     }
@@ -111,6 +120,7 @@ struct ContentView: View {
             Divider()
             Button { showInsights = true } label: { Label("Insights", systemImage: "chart.bar") }
             Button { showEngInsights = true } label: { Label("Eng insights", systemImage: "cpu") }
+            Button { showLabels = true } label: { Label("Manage labels", systemImage: "tag") }
             Button { showPeople = true } label: { Label("People", systemImage: "person.2") }
             Divider()
             Button { showStandup = true } label: { Label("Standup roll-up", systemImage: "text.append") }
@@ -139,6 +149,18 @@ struct ContentView: View {
     }
 
     private var availableTags: [String] { availableTaskTags(model.engineeringTasks) }
+
+    /// Tasks for the active queue label in saved position order.
+    private var queueTasks: [EngTask] {
+        guard !queueLabelId.isEmpty, !model.queueOrder.isEmpty else { return [] }
+        let byJiraId = Dictionary(
+            uniqueKeysWithValues: model.engineeringTasks.compactMap { t -> (String, EngTask)? in
+                guard let jid = t.jiraId else { return nil }
+                return (jid, t)
+            }
+        )
+        return model.queueOrder.compactMap { byJiraId[$0] }
+    }
 
     private var hasActiveFilters: Bool {
         filterStage != "all" || filterStatus != "any" || !filterTagsCSV.isEmpty
@@ -247,20 +269,48 @@ struct ContentView: View {
             if !model.engineeringTasks.isEmpty || model.jiraConnected {
                 Section {
                     if !isCollapsed("tasks") {
-                        ForEach(filteredSortedTasks) { task in
-                            JiraTaskRow(task: task)
-                                .listRowSeparator(.visible)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                .contentShape(Rectangle())
-                                .onTapGesture { Haptics.tap(); selectedTask = task }
-                        }
-                        if filteredSortedTasks.isEmpty {
-                            Text(hasActiveFilters
-                                ? "no tasks match — clear filters"
-                                : (model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira"))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        if !queueLabelId.isEmpty {
+                            // Queue mode: tasks for the active label in saved order, drag-to-reorder.
+                            ForEach(queueTasks) { task in
+                                JiraTaskRow(task: task, labels: model.labels)
+                                    .listRowSeparator(.visible)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { Haptics.tap(); selectedTask = task }
+                                    .swipeActions(edge: .leading) {
+                                        Button { labelPickerTask = task } label: { Label("Labels", systemImage: "tag") }.tint(.purple)
+                                    }
+                            }
+                            .onMove { indices, dest in
+                                var ids = model.queueOrder
+                                ids.move(fromOffsets: indices, toOffset: dest)
+                                Task { await model.reorderLabel(labelId: queueLabelId, jiraIds: ids) }
+                            }
+                            if queueTasks.isEmpty {
+                                Text("no tasks in this queue yet — attach a label from a task row")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            }
+                        } else {
+                            ForEach(filteredSortedTasks) { task in
+                                JiraTaskRow(task: task, labels: model.labels)
+                                    .listRowSeparator(.visible)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { Haptics.tap(); selectedTask = task }
+                                    .swipeActions(edge: .leading) {
+                                        Button { labelPickerTask = task } label: { Label("Labels", systemImage: "tag") }.tint(.purple)
+                                    }
+                            }
+                            if filteredSortedTasks.isEmpty {
+                                Text(hasActiveFilters
+                                    ? "no tasks match — clear filters"
+                                    : (model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira"))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            }
                         }
                     }
                 } header: {
@@ -399,47 +449,87 @@ struct ContentView: View {
     @ViewBuilder
     private var tasksHeader: some View {
         let badgeCount = filteredSortedTasks.filter(\.needsAction).count
-        HStack(spacing: 8) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { toggleCollapsed("tasks") }
-            } label: {
-                HStack(spacing: 6) {
-                    collapseChevron("tasks")
-                    Text("# tasks")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.headerAccent)
-                    if badgeCount > 0 {
-                        Text("\(badgeCount) need you")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { toggleCollapsed("tasks") }
+                } label: {
+                    HStack(spacing: 6) {
+                        collapseChevron("tasks")
+                        Text("# tasks")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.headerAccent)
+                        if queueLabelId.isEmpty, badgeCount > 0 {
+                            Text("\(badgeCount) need you")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if queueLabelId.isEmpty {
+                    if filterStage != "all" {
+                        Text("[\(filterStage)]")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Theme.headerAccent)
+                    }
+                    taskFilterMenu
+                }
+                queueLabelMenu
+                Button { Task { await model.syncTasks() } } label: {
+                    HStack(spacing: 5) {
+                        if model.isSyncingTasks {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 10))
+                        }
+                        Text(model.isSyncingTasks ? "syncing" : "sync")
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.orange)
                     }
+                    .foregroundStyle(model.isSyncingTasks ? Color.secondary : Theme.headerAccent)
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .disabled(model.isSyncingTasks)
             }
-            .buttonStyle(.plain)
-            Spacer()
-            if filterStage != "all" {
-                Text("[\(filterStage)]")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Theme.headerAccent)
-            }
-            taskFilterMenu
-            Button { Task { await model.syncTasks() } } label: {
-                HStack(spacing: 5) {
-                    if model.isSyncingTasks {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 10))
-                    }
-                    Text(model.isSyncingTasks ? "syncing" : "sync")
-                        .font(.system(size: 11, design: .monospaced))
-                }
-                .foregroundStyle(model.isSyncingTasks ? Color.secondary : Theme.headerAccent)
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isSyncingTasks)
         }
         .textCase(nil)
+    }
+
+    /// Menu to pick (or clear) the active queue label.
+    @ViewBuilder private var queueLabelMenu: some View {
+        Menu {
+            Button {
+                queueLabelId = ""
+                model.queueOrder = []
+            } label: {
+                if queueLabelId.isEmpty {
+                    Label("All tasks", systemImage: "checkmark")
+                } else {
+                    Text("All tasks")
+                }
+            }
+            if !model.labels.isEmpty {
+                Divider()
+                ForEach(model.labels) { lbl in
+                    Button {
+                        queueLabelId = lbl.id
+                        Task { await model.loadLabelOrder(lbl.id) }
+                    } label: {
+                        if queueLabelId == lbl.id {
+                            Label(lbl.name, systemImage: "checkmark")
+                        } else {
+                            Text(lbl.name)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: queueLabelId.isEmpty ? "tag" : "tag.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(queueLabelId.isEmpty ? Theme.headerAccent : Theme.labelColor(model.label(queueLabelId)?.color ?? ""))
+        }
     }
 
     @ViewBuilder

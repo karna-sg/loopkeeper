@@ -16,6 +16,14 @@
 
 import { createHash } from "node:crypto";
 
+/** A LoopKeeper-side label (distinct from Jira's read-only `labels` / #tags). */
+export interface EngLabel {
+  id: string;
+  name: string;
+  color: string;
+  createdTs: string;
+}
+
 /** The lifecycle stages, in order (PRD §7.1 + post-deploy verify/rollback). */
 export const STAGES = ["plan", "dev", "test", "pr", "review", "merge", "deploy", "verify", "rollback"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -299,6 +307,8 @@ export interface EngTask {
   acceptanceCriteria: string | null;
   labels: string[];
   components: string[];
+  /** LoopKeeper-side label ids attached to this task (not Jira labels). Populated by left-join on eng_task_labels. */
+  labelIds: string[];
   /** Jira accountId of the assignee (FR-2 import filter; assignee-only gate auth). */
   assignee: string;
   /** Jira status name (advisory/display only; the LK stage is independent — PRD §7). */

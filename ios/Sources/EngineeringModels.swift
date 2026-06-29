@@ -5,6 +5,18 @@ import Foundation
 
 let engStages = ["plan", "dev", "test", "pr", "review", "merge", "deploy", "verify"]
 
+// MARK: - LoopKeeper Labels (distinct from Jira's read-only labels / #tags)
+
+struct EngLabel: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let color: String   // hex string, e.g. "#61BD4F"
+    let createdTs: String?
+}
+
+struct LabelsResponse: Decodable { let labels: [EngLabel] }
+struct LabelResponse: Decodable { let label: EngLabel }
+
 struct PlanArtifact: Codable, Hashable {
     let text: String?
     let editedText: String?
@@ -140,8 +152,10 @@ struct EngTask: Codable, Identifiable, Hashable {
     let title: String
     let description: String?
     let acceptanceCriteria: String?
+    let jiraId: String?
     let labels: [String]?
     let components: [String]?
+    let labelIds: [String]?
     let jiraStatus: String?
     let repo: String?
     let branch: String?

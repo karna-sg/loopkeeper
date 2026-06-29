@@ -24,6 +24,11 @@ final class AppModel {
     /// Guards the one-shot auto-sync on first load so re-renders don't re-trigger it.
     private var didAutoSyncTasks = false
 
+    /// LoopKeeper-side label catalog. Loaded alongside tasks; used by chips + picker + queue view.
+    var labels: [EngLabel] = []
+    /// jira_ids in saved queue order for the active label (populated on demand by loadLabelOrder).
+    var queueOrder: [String] = []
+
     private var api: APIClient
 
     init(api: APIClient = APIClient()) {
@@ -53,9 +58,11 @@ final class AppModel {
             async let briefTask = api.brief()
             async let healthTask = api.health()
             async let tasksTask = try? api.tasks() // nil-tolerant: Jira may be unconnected (503)
+            async let labelsTask = try? api.labels()
             brief = try await briefTask
             health = (try? await healthTask) ?? health           // non-fatal: a health hiccup shouldn't error the page
             engineeringTasks = (await tasksTask) ?? engineeringTasks
+            labels = (await labelsTask) ?? labels
             errorMessage = nil
             lastUpdated = Date()
             if let brief { LocalNudges.reschedule(brief) }
@@ -253,6 +260,44 @@ final class AppModel {
     var tasksNeedingAction: Int { engineeringTasks.filter(\.needsAction).count }
 
     func refreshTasks() async { engineeringTasks = (try? await api.tasks()) ?? engineeringTasks }
+    func refreshLabels() async { labels = (try? await api.labels()) ?? labels }
+
+    func label(_ id: String) -> EngLabel? { labels.first { $0.id == id } }
+
+    func createLabel(name: String, color: String) async {
+        _ = try? await api.createLabel(name: name, color: color)
+        await refreshLabels()
+    }
+
+    func updateLabel(id: String, name: String? = nil, color: String? = nil) async {
+        _ = try? await api.updateLabel(id: id, name: name, color: color)
+        await refreshLabels()
+    }
+
+    func deleteLabel(id: String) async {
+        try? await api.deleteLabel(id: id)
+        await refreshLabels()
+        await refreshTasks()
+    }
+
+    func attachLabel(task: EngTask, labelId: String) async {
+        try? await api.attachLabel(taskId: task.id, labelId: labelId)
+        await refreshTasks()
+    }
+
+    func detachLabel(task: EngTask, labelId: String) async {
+        try? await api.detachLabel(taskId: task.id, labelId: labelId)
+        await refreshTasks()
+    }
+
+    func loadLabelOrder(_ labelId: String) async {
+        queueOrder = (try? await api.labelOrder(labelId)) ?? []
+    }
+
+    func reorderLabel(labelId: String, jiraIds: [String]) async {
+        queueOrder = jiraIds
+        try? await api.reorderLabel(labelId: labelId, jiraIds: jiraIds)
+    }
 
     /// Fetch a single task's detail + timeline (for the workspace + its live poll). Best-effort: a
     /// transient or teardown failure (e.g. the 3s poll firing as the sheet closes) returns nil WITHOUT

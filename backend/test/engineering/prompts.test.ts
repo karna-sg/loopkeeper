@@ -13,6 +13,7 @@ const baseTask = {
   acceptanceCriteria: "It works.\nIt is fast.",
   labels: [],
   components: [],
+  labelIds: [],
   assignee: "acct-1",
   jiraStatus: "In Progress",
   repo: "karna/loopkeeper",

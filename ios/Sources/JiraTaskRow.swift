@@ -4,11 +4,14 @@ import SwiftUI
 ///
 ///     ● LK-4   plan      awaiting
 ///       Wire up the retry queue for failed deploys
+///       [P0] [backend]
 ///
-/// The leading glyph is the only color (dim dot = needs you, neutral otherwise). No capsule
-/// badge, no card. Hierarchy comes from weight + indent, not size or chrome.
+/// The leading glyph is the only color (dim dot = needs you, neutral otherwise). Label chips
+/// appear below the title when any LoopKeeper labels are attached.
 struct JiraTaskRow: View {
     let task: EngTask
+    /// Label catalog passed in from the parent so the row can resolve ids → names/colors.
+    var labels: [EngLabel] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -35,6 +38,19 @@ struct JiraTaskRow: View {
                 .foregroundStyle(.primary)
                 .lineLimit(2)
                 .padding(.leading, 17)
+            if !attachedLabels.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(attachedLabels) { lbl in
+                        Text(lbl.name)
+                            .font(.system(size: 10, design: .monospaced))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Theme.labelColor(lbl.color).opacity(0.20))
+                            .foregroundStyle(Theme.labelColor(lbl.color))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+                .padding(.leading, 17)
+            }
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .ignore)
@@ -48,5 +64,11 @@ struct JiraTaskRow: View {
 
     private var glyphTint: Color {
         Theme.tickTint(task.status)
+    }
+
+    private var attachedLabels: [EngLabel] {
+        guard let ids = task.labelIds, !ids.isEmpty else { return [] }
+        let catalog = Dictionary(uniqueKeysWithValues: labels.map { ($0.id, $0) })
+        return ids.compactMap { catalog[$0] }
     }
 }

@@ -547,4 +547,83 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     engStore.setProgress(id, { lastError: "Cancelled by user." }, now);
     return { ok: true };
   });
+
+  // --- Labels CRUD ---
+
+  app.get("/labels", async () => {
+    return { labels: engStore.listLabels() };
+  });
+
+  app.post("/labels", async (req, reply) => {
+    const { name, color } = (req.body ?? {}) as { name?: string; color?: string };
+    if (!name || !color) return reply.code(400).send({ error: "name and color required" });
+    try {
+      const label = engStore.createLabel(name, color);
+      return { label };
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("UNIQUE constraint failed")) {
+        return reply.code(409).send({ error: "a label with that name already exists" });
+      }
+      throw err;
+    }
+  });
+
+  app.patch("/labels/:labelId", async (req, reply) => {
+    const { labelId } = req.params as { labelId: string };
+    const patch = (req.body ?? {}) as { name?: string; color?: string };
+    try {
+      const label = engStore.updateLabel(labelId, patch);
+      if (!label) return reply.code(404).send({ error: "label not found" });
+      return { label };
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("UNIQUE constraint failed")) {
+        return reply.code(409).send({ error: "a label with that name already exists" });
+      }
+      throw err;
+    }
+  });
+
+  app.delete("/labels/:labelId", async (req) => {
+    const { labelId } = req.params as { labelId: string };
+    engStore.deleteLabel(labelId);
+    return { ok: true };
+  });
+
+  // --- Label attach / detach on tasks ---
+
+  app.post("/tasks/:id/labels", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "task not found" });
+    const { labelId } = (req.body ?? {}) as { labelId?: string };
+    if (!labelId) return reply.code(400).send({ error: "labelId required" });
+    const labels = engStore.listLabels();
+    if (!labels.find((l) => l.id === labelId)) return reply.code(404).send({ error: "label not found" });
+    engStore.attachLabel(labelId, task.jiraId);
+    return { ok: true };
+  });
+
+  app.delete("/tasks/:id/labels/:labelId", async (req, reply) => {
+    const { id, labelId } = req.params as { id: string; labelId: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "task not found" });
+    engStore.detachLabel(labelId, task.jiraId);
+    return { ok: true };
+  });
+
+  // --- Label queue order ---
+
+  app.get("/labels/:labelId/order", async (req) => {
+    const { labelId } = req.params as { labelId: string };
+    const jiraIds = engStore.labelTaskOrder(labelId);
+    return { jiraIds };
+  });
+
+  app.put("/labels/:labelId/order", async (req, reply) => {
+    const { labelId } = req.params as { labelId: string };
+    const { jiraIds } = (req.body ?? {}) as { jiraIds?: string[] };
+    if (!Array.isArray(jiraIds)) return reply.code(400).send({ error: "jiraIds array required" });
+    engStore.reorderLabel(labelId, jiraIds);
+    return { ok: true };
+  });
 }
