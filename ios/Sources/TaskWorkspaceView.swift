@@ -24,6 +24,7 @@ struct TaskWorkspaceView: View {
     @State private var activityOffset: Int = 0
     @State private var activityDone: Bool = false
     @State private var activityPollTask: Task<Void, Never>?
+    @State private var streamTask: Task<Void, Never>?
     @State private var requirementsExpanded = true
     @State private var diffExpanded = false
     @State private var showJiraWritebackConfirm = false
@@ -65,6 +66,7 @@ struct TaskWorkspaceView: View {
             .onDisappear {
                 pollTask?.cancel()
                 activityPollTask?.cancel()
+                streamTask?.cancel()
             }
         }
     }
@@ -555,7 +557,7 @@ struct TaskWorkspaceView: View {
             if planText.isEmpty { planText = detail.task.artifacts?.plan?.editedText ?? detail.task.artifacts?.plan?.text ?? "" }
         }
         loading = false
-        startPollIfNeeded()
+        startStreamIfNeeded()
     }
 
     private func reload() async {
@@ -563,7 +565,7 @@ struct TaskWorkspaceView: View {
             task = detail.task
             events = detail.events
         }
-        startPollIfNeeded()
+        startStreamIfNeeded()
     }
 
     /// Poll /tasks/:id/status every 3s while a stage runs (bounded; mirrors waitForScan cadence).
@@ -596,6 +598,53 @@ struct TaskWorkspaceView: View {
                         activityDone = response.done
                     }
                     if response.done { break }
+                }
+            }
+        }
+    }
+
+    /// Connect to the SSE stream for live activity and status updates, with no fixed iteration cap.
+    /// Falls back to offset polling after 3 consecutive stream failures.
+    private func startStreamIfNeeded() {
+        streamTask?.cancel()
+        pollTask?.cancel()
+        activityPollTask?.cancel()
+        guard task?.isRunning == true else { return }
+        streamTask = Task {
+            var failCount = 0
+            while !Task.isCancelled {
+                do {
+                    for try await event in model.taskStream(taskID) {
+                        guard !Task.isCancelled else { return }
+                        switch event.type {
+                        case "status":
+                            guard let raw = event.data.data(using: .utf8),
+                                  let update = try? JSONDecoder().decode(SSEStatusUpdate.self, from: raw)
+                            else { continue }
+                            // Fetch fresh detail so we pick up all updated fields (artifacts, etc.).
+                            if let detail = await model.taskDetail(taskID) {
+                                await MainActor.run { task = detail.task; events = detail.events }
+                            }
+                            if update.isTerminal {
+                                await MainActor.run { activityDone = true }
+                                return
+                            }
+                        default:
+                            guard !event.data.isEmpty else { continue }
+                            await MainActor.run { activityLines.append(event.data) }
+                        }
+                        failCount = 0
+                    }
+                    await MainActor.run { activityDone = true }
+                    return // Stream ended normally (server closed after terminal status).
+                } catch {
+                    failCount += 1
+                    if failCount >= 3 {
+                        startPollIfNeeded() // Permanent fallback to bounded offset polling.
+                        return
+                    }
+                    let backoff = min(pow(2.0, Double(failCount)), 30.0)
+                    try? await Task.sleep(for: .seconds(backoff))
                 }
             }
         }

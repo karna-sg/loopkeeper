@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -245,6 +246,7 @@ function toRun(r: RunRow): AgentRun {
  */
 export class EngStore {
   readonly #db: Database.Database;
+  readonly transitionEmitter = new EventEmitter();
 
   constructor(dbPath: string) {
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
@@ -676,7 +678,11 @@ export class EngStore {
       }
       return true;
     });
-    return apply() ? { ok: true, changed: true } : { ok: false, changed: false, reason: "concurrent update lost the race" };
+    const changed = apply();
+    if (changed) {
+      this.transitionEmitter.emit("transition", { taskId: args.taskId, stage: args.to.stage, status: args.to.status });
+    }
+    return changed ? { ok: true, changed: true } : { ok: false, changed: false, reason: "concurrent update lost the race" };
   }
 
   /** Has this task ever crossed the merge gate via a recorded user approval? (deploy-retry guard) */

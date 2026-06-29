@@ -286,3 +286,23 @@ struct ActivityResponse: Decodable {
     let nextOffset: Int
     let done: Bool
 }
+
+// MARK: - SSE Stream (GET /tasks/:id/stream)
+
+/// One parsed SSE block from `GET /tasks/:id/stream`.
+/// `type` is the event name ("data" for activity lines, "status" for stage/status transitions).
+struct SSEEvent {
+    let type: String
+    let data: String
+}
+
+/// Payload of a `status` SSE event — mirrors the `{ stage, status }` JSON the backend emits.
+struct SSEStatusUpdate: Decodable {
+    let stage: String
+    let status: String
+    var isTerminal: Bool {
+        status == "cancelled" ||
+        (stage == "verify" && status == "verified") ||
+        (stage == "rollback" && status == "rolled_back")
+    }
+}

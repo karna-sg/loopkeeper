@@ -837,3 +837,123 @@ describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
     expect((await app.inject({ method: "PATCH", url: "/tasks/task_nonexistent", payload: { claudeModel: "claude-sonnet-4-6" } })).statusCode).toBe(404);
   });
 });
+
+// --- SSE stream (LP-71) ---
+// Streaming tests require a real listening server (inject doesn't support hijacked SSE connections).
+
+describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
+  it("returns 404 for unknown task (pre-hijack path)", async () => {
+    const { app } = makeApp();
+    // The 404 branch returns before reply.hijack(), so app.inject() works here.
+    const res = await app.inject({ method: "GET", url: "/tasks/task_nope/stream" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("replays current log tail on connect and sets text/event-stream header", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("10001");
+
+    const logDir = mkdtempSync(join(tmpdir(), "lk-sse-"));
+    const logPath = join(logDir, "plan-sse.jsonl");
+    const logContent =
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Planning." }] } }) + "\n";
+    writeFileSync(logPath, logContent);
+    const runId = engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sse-1", iteration: 1, startedTs: NOW });
+    engStore.finishAgentRun(runId, {
+      status: "succeeded", finishedTs: NOW, exitCode: 0, usdCents: 1, numTurns: 1, resultSummary: "done", logPath,
+    });
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as { port: number }).port;
+    try {
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${port}/tasks/${id}/stream`, { signal: ac.signal });
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let collected = "";
+      while (!collected.includes("data: text: Planning.")) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        collected += decoder.decode(value);
+      }
+      ac.abort();
+      expect(collected).toContain("data: text: Planning.");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("emits a status SSE event when a transition fires, then closes the stream on terminal status", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("10001");
+    // Advance to a stage that can be transitioned
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as { port: number }).port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/tasks/${id}/stream`);
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+
+      // Fire a transition after connecting
+      setTimeout(() => {
+        engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+      }, 20);
+
+      let collected = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break; // Server closed the stream after the terminal transition
+        collected += decoder.decode(value);
+      }
+
+      expect(collected).toContain("event: status");
+      expect(collected).toContain('"status":"cancelled"');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("tears down the emitter listener on client disconnect", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("10001");
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as { port: number }).port;
+    try {
+      expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
+
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${port}/tasks/${id}/stream`, { signal: ac.signal });
+      const reader = res.body!.getReader();
+      // Kick off reading so the connection is fully established server-side.
+      const firstRead = reader.read();
+
+      // Poll until the listener is registered (the server awaits flushNewLines before attaching it).
+      const deadline = Date.now() + 1000;
+      while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
+
+      // Disconnect the client.
+      ac.abort();
+      await firstRead.catch(() => {});
+
+      // Wait for server-side cleanup.
+      const cleanupDeadline = Date.now() + 1000;
+      while (engStore.transitionEmitter.listenerCount("transition") > 0 && Date.now() < cleanupDeadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+});

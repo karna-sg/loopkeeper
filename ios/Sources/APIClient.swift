@@ -102,6 +102,45 @@ struct APIClient {
     func taskActivity(_ id: String, offset: Int = 0) async throws -> ActivityResponse {
         try await getJSON("/tasks/\(id)/activity?offset=\(offset)")
     }
+
+    /// SSE stream from GET /tasks/:id/stream. Yields one event per complete SSE block.
+    /// Heartbeat comment lines (starting with ":") are silently dropped.
+    func taskStream(_ id: String) -> AsyncThrowingStream<SSEEvent, Error> {
+        var req = makeRequest("/tasks/\(id)/stream", method: "GET", json: false)
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        return AsyncThrowingStream { continuation in
+            let urlTask = Task {
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: req)
+                    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                        continuation.finish(throwing: APIError(status: http.statusCode, message: nil))
+                        return
+                    }
+                    var currentType = "data"
+                    var currentData = ""
+                    for try await line in bytes.lines {
+                        if line.isEmpty {
+                            if !currentData.isEmpty {
+                                continuation.yield(SSEEvent(type: currentType, data: currentData))
+                            }
+                            currentType = "data"
+                            currentData = ""
+                        } else if line.hasPrefix("event: ") {
+                            currentType = String(line.dropFirst(7))
+                        } else if line.hasPrefix("data: ") {
+                            currentData = String(line.dropFirst(6))
+                        }
+                        // Lines starting with ":" are heartbeat comments — skip
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in urlTask.cancel() }
+        }
+    }
+
     func syncTasks() async throws { try await act("/tasks/sync") }
 
     func preparePlan(_ id: String) async throws { try await act("/tasks/\(id)/prepare-plan") }
