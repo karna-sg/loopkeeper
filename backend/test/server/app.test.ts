@@ -951,38 +951,35 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
     try {
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
 
-      // Use http.request so req.destroy() immediately closes the TCP socket, giving the server
-      // a reliable 'close' event (AbortController + undici can delay that notification).
-      let destroyClient: (() => void) | undefined;
+      // Open an SSE connection and wait until the server-side handler has registered its listener.
       await new Promise<void>((resolve) => {
         const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
-          res.resume(); // drain to prevent backpressure stalling the server
-          resolve(); // headers received = server-side handler is running
+          res.resume(); // drain so the server write side never stalls
+          resolve(); // response headers received — server handler is executing
         });
-        req.on("error", () => {}); // swallow ECONNRESET on destroy()
+        req.on("error", () => {}); // swallow errors emitted after server closes the socket
         req.end();
-        destroyClient = () => req.destroy();
       });
 
-      // Poll until the emitter listener is registered.
+      // Poll until the emitter listener is registered (server handler completes its async setup).
       const deadline = Date.now() + 1000;
       while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
 
-      // Destroy the socket — this delivers an immediate TCP RST to the server.
-      destroyClient?.();
+      // Simulate connection drop: closeAllConnections() destroys every server-side socket, which
+      // fires the same rawSocket 'close' event that a real client disconnect would trigger.
+      app.server.closeAllConnections();
 
-      // Wait for the server's req.raw 'close' handler to remove the listener.
+      // Wait for the socket 'close' handler to call cleanup() and remove the listener.
       const cleanupDeadline = Date.now() + 1000;
       while (engStore.transitionEmitter.listenerCount("transition") > 0 && Date.now() < cleanupDeadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
     } finally {
-      app.server.closeAllConnections();
-      await app.close();
+      await app.close(); // connections already closed above; resolves immediately
     }
   });
 });
