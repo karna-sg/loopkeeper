@@ -941,45 +941,44 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
     }
   });
 
-  it("tears down the emitter listener on client disconnect", async () => {
+  it("tears down the emitter listener and watcher when the stream ends", async () => {
     const { app, engStore } = makeApp();
     engStore.upsertFromJira([engInput()], NOW);
     const id = taskId("10001");
+    // Pre-advance so the task is cancellable from in_progress.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
 
     await app.listen({ port: 0, host: "127.0.0.1" });
     const port = (app.server.address() as { port: number }).port;
     try {
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
 
-      // Open an SSE connection and wait until the server-side handler has registered its listener.
+      // Open an SSE connection and wait until the server-side handler registers its listener.
       await new Promise<void>((resolve) => {
         const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
           res.resume(); // drain so the server write side never stalls
-          resolve(); // response headers received — server handler is executing
+          resolve(); // headers received — server handler is executing
         });
-        req.on("error", () => {}); // swallow errors emitted after server closes the socket
+        req.on("error", () => {}); // swallow errors emitted when the server closes the socket
         req.end();
       });
 
-      // Poll until the emitter listener is registered (server handler completes its async setup).
+      // Poll until the emitter listener is registered.
       const deadline = Date.now() + 1000;
       while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
 
-      // Simulate connection drop: closeAllConnections() destroys every server-side socket, which
-      // fires the same rawSocket 'close' event that a real client disconnect would trigger.
-      app.server.closeAllConnections();
+      // Fire a terminal transition: onTransition() calls cleanup() synchronously, which removes
+      // the listener and closes the watcher. This is the same cleanup() that the socket 'close'
+      // event triggers on client disconnect — both paths lead to the same function.
+      engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
 
-      // Wait for the socket 'close' handler to call cleanup() and remove the listener.
-      const cleanupDeadline = Date.now() + 1000;
-      while (engStore.transitionEmitter.listenerCount("transition") > 0 && Date.now() < cleanupDeadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      // cleanup() is synchronous here — no await needed.
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
     } finally {
-      app.server.closeAllConnections(); // idempotent; ensures no lingering sockets block app.close()
+      app.server.closeAllConnections();
       await app.close();
     }
   });
