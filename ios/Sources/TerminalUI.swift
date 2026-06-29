@@ -18,6 +18,7 @@ extension Font {
 /// `# section_name` header in the terminal teal accent. Pass the full title string (e.g. `"# shipped"`).
 struct TerminalSectionHeader: View {
     let title: String
+    init(_ title: String) { self.title = title }
     var body: some View {
         Text(title)
             .font(.monoHdr)
