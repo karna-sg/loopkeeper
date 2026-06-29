@@ -366,6 +366,8 @@ final class AppModel {
         }
     }
     func cancelTask(_ t: EngTask) async { Haptics.warning(); if await mutateTasks({ try await api.cancelTask(t.id) }) { lastActionLabel = "Stopping…" } }
+    func jiraWritebackDraft(_ t: EngTask) async { Haptics.tap(); _ = await mutateTasks({ try await api.jiraWritebackDraft(t.id) }) }
+    func jiraWritebackConfirm(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.jiraWritebackConfirm(t.id) }) { lastActionLabel = "Posted to Jira" } }
     func confirmVerify(_ t: EngTask) async { Haptics.success(); if await mutateTasks({ try await api.confirmVerify(t.id) }) { lastActionLabel = "Verified" } }
     func retryVerify(_ t: EngTask) async { Haptics.tap(); if await mutateTasks({ try await api.retryVerify(t.id) }) { lastActionLabel = "Re-checking…" } }
     func rollback(_ t: EngTask) async { Haptics.warning(); if await mutateTasks({ try await api.rollback(t.id) }) { lastActionLabel = "Rolling back…" } }

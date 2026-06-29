@@ -247,6 +247,17 @@ export interface AcCheckItem {
   evidence: string;
 }
 
+/**
+ * Opt-in advisory Jira comment (LP-66). Human-approved before post; stored as a DRAFT first,
+ * never auto-sent. Engineering stage/status is NEVER written to Jira — only this comment.
+ */
+export interface JiraWritebackArtifact {
+  draftBody: string;
+  draftTs: string;
+  postedTs: string | null;
+  postedBy: string | null;
+}
+
 export interface TaskArtifacts {
   plan: PlanArtifact | null;
   dev: DevArtifact | null;
@@ -258,6 +269,7 @@ export interface TaskArtifacts {
   verify: VerifyArtifact | null;
   rollback: RollbackArtifact | null;
   acCheck: AcCheckItem[] | null;
+  jiraWriteback: JiraWritebackArtifact | null;
 }
 
 export const EMPTY_ARTIFACTS: TaskArtifacts = {
@@ -271,6 +283,7 @@ export const EMPTY_ARTIFACTS: TaskArtifacts = {
   verify: null,
   rollback: null,
   acCheck: null,
+  jiraWriteback: null,
 };
 
 /** Per-task cost + iteration caps (PRD §8/§9). All counters accumulate; the worker escalates at a cap. */

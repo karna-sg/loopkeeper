@@ -359,6 +359,7 @@ describe("engineering routes", () => {
       searchAssigned: async () => [],
       getIssue: async (idOrKey) => (idOrKey === "10001" ? liveIssue : null),
       currentUserAccountId: async () => "acct-1",
+      addComment: async () => {},
     };
     const jira = new JiraSyncService(fakeClient, new EngStore(":memory:"), { siteUrl: "https://x.atlassian.net", repo: "r/r", defaultBranch: "main" });
     const { app, engStore } = makeApp({}, undefined, jira);

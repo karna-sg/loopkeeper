@@ -26,6 +26,7 @@ struct TaskWorkspaceView: View {
     @State private var activityPollTask: Task<Void, Never>?
     @State private var requirementsExpanded = true
     @State private var diffExpanded = false
+    @State private var showJiraWritebackConfirm = false
 
     // Terminal-clean type scale. One face (monospaced), hierarchy via weight + dim.
     private let mono = Font.system(size: 13, design: .monospaced)
@@ -46,6 +47,7 @@ struct TaskWorkspaceView: View {
                             ActivityFeedView(lines: activityLines, done: activityDone)
                         }
                         pipeline(task)
+                        jiraWritebackCard(task)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
@@ -437,6 +439,49 @@ struct TaskWorkspaceView: View {
     @ViewBuilder private func primaryAction(_ task: EngTask) -> some View {
         if task.stage == "plan" && task.status == "not_started" {
             actionButton("prepare plan", .blue) { await model.preparePlan(task); await reload() }
+        }
+    }
+
+    // MARK: Jira write-back card (LP-66)
+
+    /// Shows when there is content worth commenting on (branch or PR). Three states:
+    /// no draft → "draft jira comment" button; draft exists → preview + confirm; already posted → label.
+    @ViewBuilder private func jiraWritebackCard(_ task: EngTask) -> some View {
+        let wb = task.artifacts?.jiraWriteback
+        let hasBranch = task.artifacts?.dev?.branch != nil
+        let hasPR = task.artifacts?.pr?.url != nil
+        let showCard = wb != nil || hasBranch || hasPR
+        if showCard {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("# jira comment", tint: .secondary)
+                if let wb {
+                    if let postedTs = wb.postedTs {
+                        Text("posted to jira at \(postedTs.prefix(10))")
+                            .font(monoSmall).foregroundStyle(.secondary)
+                    } else {
+                        if let draft = wb.draftBody, !draft.isEmpty {
+                            Text(draft.prefix(300).description + (draft.count > 300 ? "\n[…]" : ""))
+                                .font(monoSmall).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        actionButton("post to jira", .orange) {
+                            showJiraWritebackConfirm = true
+                        }
+                        .confirmationDialog("Post this comment to Jira?", isPresented: $showJiraWritebackConfirm, titleVisibility: .visible) {
+                            Button("Post comment") { Task { await model.jiraWritebackConfirm(task); await reload() } }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This posts the draft comment above to the Jira issue. It cannot be undone from the app.")
+                        }
+                        actionButton("re-draft", .secondary) { await model.jiraWritebackDraft(task); await reload() }
+                    }
+                } else {
+                    actionButton("draft jira comment", .secondary) { await model.jiraWritebackDraft(task); await reload() }
+                    Text("Composes an advisory comment (plan + branch + PR) for human review before posting.")
+                        .font(monoSmall).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, 4)
         }
     }
 

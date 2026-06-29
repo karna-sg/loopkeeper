@@ -6,7 +6,7 @@ export type JiraTokenProvider = () => Promise<string>;
 
 const FIELDS = "summary,description,status,labels,components,assignee";
 
-/** Read-only Jira Cloud REST v3 client over the testable HttpClient seam. */
+/** Jira Cloud REST v3 client over the testable HttpClient seam. */
 export interface JiraClient {
   /** Issues assigned to the authed user (FR-2). */
   searchAssigned(jql?: string): Promise<JiraIssue[]>;
@@ -14,6 +14,8 @@ export interface JiraClient {
   getIssue(idOrKey: string): Promise<JiraIssue | null>;
   /** The authed user's accountId (for the assignee gate identity). */
   currentUserAccountId(): Promise<string>;
+  /** Post a comment to a Jira issue (LP-66). Body is plain text; client wraps it in minimal ADF. */
+  addComment(issueIdOrKey: string, body: string): Promise<void>;
 }
 
 /** Shared parsing for the two auth variants below. */
@@ -86,6 +88,21 @@ function issueUrl(base: string, idOrKey: string): string {
   return `${base}/issue/${encodeURIComponent(idOrKey)}?fields=${encodeURIComponent(FIELDS)}`;
 }
 
+function commentUrl(base: string, idOrKey: string): string {
+  return `${base}/issue/${encodeURIComponent(idOrKey)}/comment`;
+}
+
+/** Wrap plain text in the minimal Atlassian Document Format required by REST API v3 comments. */
+function toAdf(body: string): string {
+  return JSON.stringify({
+    body: {
+      type: "doc",
+      version: 1,
+      content: [{ type: "paragraph", content: [{ type: "text", text: body }] }],
+    },
+  });
+}
+
 const DEFAULT_JQL = "assignee = currentUser() ORDER BY updated DESC";
 
 /** OAuth (3LO) variant — Bearer token against the api.atlassian.com cloudId gateway. */
@@ -116,6 +133,14 @@ export class CloudJiraClient implements JiraClient {
     const body = (await this.#http.getJson(`${this.#base}/myself`, await this.#auth())) as { accountId?: string };
     return body.accountId ?? "";
   }
+
+  async addComment(issueIdOrKey: string, body: string): Promise<void> {
+    const res = await this.#http.post(commentUrl(this.#base, issueIdOrKey), {
+      headers: { ...(await this.#auth()), "content-type": "application/json" },
+      body: toAdf(body),
+    });
+    if (!res.ok) throw new Error(`Jira addComment failed: ${res.status}`);
+  }
 }
 
 /** API-token variant — HTTP Basic (email:token) against the site directly. Simplest for one user. */
@@ -145,5 +170,13 @@ export class BasicJiraClient implements JiraClient {
   async currentUserAccountId(): Promise<string> {
     const body = (await this.#http.getJson(`${this.#base}/myself`, this.#auth())) as { accountId?: string };
     return body.accountId ?? "";
+  }
+
+  async addComment(issueIdOrKey: string, body: string): Promise<void> {
+    const res = await this.#http.post(commentUrl(this.#base, issueIdOrKey), {
+      headers: { ...this.#auth(), "content-type": "application/json" },
+      body: toAdf(body),
+    });
+    if (!res.ok) throw new Error(`Jira addComment failed: ${res.status}`);
   }
 }

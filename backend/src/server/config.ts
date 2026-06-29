@@ -67,6 +67,8 @@ export interface EngConfig {
   /** Committer identity for worker commits (the container has no global git identity). */
   gitAuthorName: string;
   gitAuthorEmail: string;
+  /** Opt-in Jira comment write-back (LP-66). Off by default; requires ENG_JIRA_WRITEBACK=1. */
+  jiraWriteback: boolean;
 }
 
 export interface ServerConfig {
@@ -192,6 +194,7 @@ function envEng(env: NodeJS.ProcessEnv, dataDir: string): EngConfig {
     agentLogDir: env.ENG_AGENT_LOG_DIR ?? join(dataDir, "eng", "agent-logs"),
     gitAuthorName: env.ENG_GIT_AUTHOR_NAME ?? "LoopKeeper Bot",
     gitAuthorEmail: env.ENG_GIT_AUTHOR_EMAIL ?? "bot@loopkeeper.local",
+    jiraWriteback: env.ENG_JIRA_WRITEBACK === "1",
   };
 }
 

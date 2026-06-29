@@ -6,6 +6,7 @@ import { applyTransition } from "../../engineering/orchestrator.ts";
 import { isTerminal, shouldRetryAfterBuildFailure } from "../../engineering/state-machine.ts";
 import { RestGithubClient } from "../../engineering/adapters/rest-github.ts";
 import { buildEngStats } from "../../eng-stats.ts";
+import { buildPlanComment } from "../../engineering/writeback.ts";
 
 /** Live = a stage is executing; the status endpoint reports running vs stalled vs idle. */
 const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>(["in_progress", "creating", "merging", "deploying"]);
@@ -625,5 +626,45 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     if (!Array.isArray(jiraIds)) return reply.code(400).send({ error: "jiraIds array required" });
     engStore.reorderLabel(labelId, jiraIds);
     return { ok: true };
+  });
+
+  // --- Jira write-back (LP-66): opt-in, DRAFT-first advisory comment ---
+
+  app.post("/tasks/:id/jira/writeback/draft", async (req, reply) => {
+    if (!config.eng.jiraWriteback) return reply.code(403).send({ error: "ENG_JIRA_WRITEBACK is not enabled" });
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const now = deps.now();
+    const draftBody = buildPlanComment(task);
+    const existing = task.artifacts.jiraWriteback;
+    engStore.setArtifact(
+      id,
+      { jiraWriteback: { draftBody, draftTs: now, postedTs: existing?.postedTs ?? null, postedBy: existing?.postedBy ?? null } },
+      now,
+    );
+    return { draftBody };
+  });
+
+  app.post("/tasks/:id/jira/writeback/confirm", async (req, reply) => {
+    if (!config.eng.jiraWriteback) return reply.code(403).send({ error: "ENG_JIRA_WRITEBACK is not enabled" });
+    const { id } = req.params as { id: string };
+    const task = engStore.get(id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const authErr = assigneeError(task);
+    if (authErr) return reply.code(403).send({ error: authErr });
+    const wb = task.artifacts.jiraWriteback;
+    if (!wb?.draftBody) return reply.code(409).send({ error: "no draft exists — call /jira/writeback/draft first" });
+    if (wb.postedTs !== null) return reply.code(409).send({ error: "already posted to Jira" });
+    const jiraSync = deps.jiraSync;
+    if (!jiraSync) return reply.code(503).send({ error: "Jira not connected" });
+    const now = deps.now();
+    try {
+      await jiraSync.addComment(task.jiraKey, wb.draftBody);
+    } catch (postErr) {
+      return reply.code(502).send({ error: postErr instanceof Error ? postErr.message : "Jira comment failed" });
+    }
+    engStore.setArtifact(id, { jiraWriteback: { ...wb, postedTs: now, postedBy: config.selfAccountId } }, now);
+    return { postedTs: now };
   });
 }
