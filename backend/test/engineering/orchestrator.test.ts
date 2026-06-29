@@ -617,3 +617,98 @@ describe("orchestrator: per-task model selection (LP-27)", () => {
     expect(runner.calls.find((c) => c.stage === "dev")?.model).toBe("claude-opus-4-8");
   });
 });
+
+// ─── LP-33: AC check at the PR gate ──────────────────────────────────────────
+
+class AcCheckRunner {
+  ok = true; // required to match FakeAgentRunner's structural type for harness()
+  calls: AgentRunArgs[] = [];
+  async run(args: AgentRunArgs): Promise<AgentRunResult> {
+    this.calls.push(args);
+    if (args.stage === "pr") {
+      const json = JSON.stringify([
+        { criterion: "It works.", pass: true, evidence: "The implementation satisfies the requirement." },
+      ]);
+      return { ok: true, sessionId: args.sessionId, finalText: json, usdCents: 5, numTurns: 1, exitCode: 0, timedOut: false };
+    }
+    return { ok: true, sessionId: args.sessionId, finalText: `did ${args.stage}`, usdCents: 10, numTurns: 1, exitCode: 0, timedOut: false };
+  }
+}
+
+async function advanceToPrProposed(engStore: EngStore, worker: WorkerRunner, id: string): Promise<void> {
+  applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+  await drain(worker);
+  applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+  await drain(worker);
+}
+
+describe("orchestrator: AC check on pr:proposed (LP-33)", () => {
+  it("stores acCheck artifact when tests pass", async () => {
+    const runner = new AcCheckRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input({ acceptanceCriteria: "It works." })], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    const acCheck = engStore.get(id)!.artifacts.acCheck;
+    expect(acCheck).not.toBeNull();
+    expect(acCheck).toHaveLength(1);
+    const item = acCheck![0];
+    expect(item).toBeDefined();
+    expect(item).toMatchObject({ criterion: "It works.", pass: true });
+    expect(item!.evidence).toBeTruthy();
+  });
+
+  it("AC check run is always fresh (resume: false, stage: pr)", async () => {
+    const runner = new AcCheckRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    const prRun = runner.calls.find((c) => c.stage === "pr");
+    expect(prRun).toBeDefined();
+    expect(prRun!.resume).toBe(false);
+  });
+
+  it("advances to pr:proposed even when AC check returns malformed JSON", async () => {
+    // Default FakeAgentRunner returns "did pr" for the pr stage — not valid JSON.
+    const { engStore, worker } = harness();
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    expect(engStore.get(id)!.artifacts.acCheck).toEqual([]);
+  });
+
+  it("bills the AC check run to the task budget", async () => {
+    const runner = new AcCheckRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+    const budgetBefore = engStore.get(id)!.budget.usdCentsUsed;
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    const budgetAfter = engStore.get(id)!.budget.usdCentsUsed;
+    // plan (10¢) + dev (10¢) + ac-check (5¢) = 25¢ total; at minimum more than plan alone
+    expect(budgetAfter).toBeGreaterThan(budgetBefore + 10);
+  });
+
+  it("stores empty acCheck when task has no acceptanceCriteria", async () => {
+    const { engStore, worker } = harness();
+    engStore.upsertFromJira([input({ acceptanceCriteria: null })], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    // FakeAgentRunner returns non-JSON "did pr", so parse fails gracefully → []
+    expect(engStore.get(id)!.artifacts.acCheck).toEqual([]);
+  });
+});

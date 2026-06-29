@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { EngStore, TransitionArgs, TransitionOutcome } from "../store/eng-store.ts";
-import type { EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
+import type { AcCheckItem, EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
 import { effectsFor, shouldRetryAfterTestFailure } from "./state-machine.ts";
 import { redactSecrets } from "../redact.ts";
-import { renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt } from "./prompts.ts";
-import type { AgentRunner, DeployerPort, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
+import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt } from "./prompts.ts";
+import type { AgentRunner, DeployerPort, DiffFile, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
 
 export interface OrchestratorDeps {
   engStore: EngStore;
@@ -222,6 +222,7 @@ export class Orchestrator {
 
       if (result.passed) {
         this.#advance(taskId, { stage: "test", status: "passed" });
+        await this.#runAcCheck(this.#require(taskId), ws.path);
         engStore.setArtifact(taskId, { pr: this.#proposePr(this.#require(taskId), result, commit.files) }, now());
         this.#advance(taskId, { stage: "pr", status: "proposed" });
         return;
@@ -426,6 +427,78 @@ export class Orchestrator {
 
   #branchUrl(task: EngTask, branch: string): string | null {
     return task.repo ? `https://github.com/${task.repo}/tree/${branch}` : null;
+  }
+
+  /**
+   * LP-33: Fresh AC-check agent run seeded with the branch diff + acceptance criteria.
+   * Never throws — all errors are caught so pr:proposed always advances.
+   * Bills iterations + usdCents to the task budget; redacts all evidence strings.
+   */
+  async #runAcCheck(task: EngTask, worktreePath: string): Promise<void> {
+    const { engStore, agentRunner, github, now } = this.#d;
+
+    let diff: DiffFile[] = [];
+    if (github) {
+      try {
+        diff = await github.getDiff(task.repo, { base: task.defaultBranch, head: task.branch ?? "HEAD" });
+      } catch {
+        // Network/GitHub error — proceed with empty diff.
+      }
+    }
+
+    engStore.addBudgetUsage(task.id, { iterations: 1 }, now());
+
+    const sessionId = randomUUID(); // always fresh — never resume; task claudeSessionId is NOT updated
+    const runId = engStore.startAgentRun({ taskId: task.id, stage: "pr", sessionId, iteration: 0, startedTs: now() });
+
+    let run: Awaited<ReturnType<AgentRunner["run"]>>;
+    try {
+      run = await agentRunner.run({
+        taskId: task.id,
+        stage: "pr",
+        sessionId,
+        worktreePath,
+        mode: "execute",
+        resume: false,
+        prompt: renderAcCheckPrompt(task, diff),
+        model: task.claudeModel,
+      });
+    } catch (err) {
+      engStore.finishAgentRun(runId, { status: "failed", finishedTs: now(), error: String(err) });
+      return;
+    }
+
+    engStore.finishAgentRun(runId, {
+      status: run.ok ? "succeeded" : "failed",
+      finishedTs: now(),
+      exitCode: run.exitCode,
+      usdCents: run.usdCents,
+      numTurns: run.numTurns,
+      resultSummary: truncate(run.finalText, 200),
+      sessionId: run.sessionId,
+      ...(run.error ? { error: run.error } : {}),
+    });
+    engStore.addBudgetUsage(task.id, { usdCents: run.usdCents }, now());
+
+    let items: AcCheckItem[] = [];
+    if (run.ok && run.finalText) {
+      try {
+        const raw = JSON.parse(run.finalText.trim()) as unknown;
+        if (Array.isArray(raw)) {
+          items = raw
+            .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+            .map((x) => ({
+              criterion: typeof x.criterion === "string" ? x.criterion : String(x.criterion ?? ""),
+              pass: x.pass === true,
+              evidence: redactSecrets(typeof x.evidence === "string" ? x.evidence : String(x.evidence ?? "")),
+            }));
+        }
+      } catch {
+        // Malformed JSON — store [] rather than crashing or blocking.
+      }
+    }
+
+    engStore.setArtifact(task.id, { acCheck: items }, now());
   }
 
   /** Build a clean, GitHub-rendered PR body: real summary, changed-file list, a one-line test result,
