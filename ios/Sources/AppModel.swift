@@ -317,6 +317,11 @@ final class AppModel {
         try? await api.taskActivity(id, offset: offset)
     }
 
+    /// SSE stream of live activity and status events for a running task.
+    func taskStream(_ id: String) -> AsyncThrowingStream<SSEEvent, Error> {
+        api.taskStream(id)
+    }
+
     /// Pull newly-assigned Jira tickets into the store (`POST /tasks/sync`), then re-read the list.
     /// This is the ONLY path that ingests new Jira tasks — plain refresh just re-reads what's stored.
     /// Manual trigger from the `# tasks` header. Surfaces real failures, but stays quiet when Jira

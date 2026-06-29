@@ -430,3 +430,52 @@ describe("EngStore: labels", () => {
     expect(task.labelIds).toEqual([]);
   });
 });
+
+describe("EngStore: transitionEmitter (LP-71)", () => {
+  let store: EngStore;
+  beforeEach(() => {
+    store = new EngStore(":memory:");
+  });
+
+  it("emits { taskId, stage, status } after a successful CAS", () => {
+    store.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    const received: unknown[] = [];
+    store.transitionEmitter.on("transition", (evt) => received.push(evt));
+
+    store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual({ taskId: id, stage: "plan", status: "in_progress" });
+  });
+
+  it("does NOT emit when the CAS loses the race (idempotent re-apply is a no-op, not an emit)", () => {
+    store.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    const received: unknown[] = [];
+    store.transitionEmitter.on("transition", (evt) => received.push(evt));
+
+    // Idempotent re-apply: task is already at plan:not_started, so no change → no emit.
+    store.transition({ taskId: id, to: { stage: "plan", status: "not_started" }, actor: "user", ts: NOW });
+
+    expect(received).toHaveLength(0);
+  });
+
+  it("does NOT emit when the gate is not approved", () => {
+    store.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+    // Advance to the plan gate: plan:not_started → plan:in_progress → plan:completed_unapproved
+    store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    store.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
+
+    const received: unknown[] = [];
+    store.transitionEmitter.on("transition", (evt) => received.push(evt));
+
+    // Gate crossing without gateApproved — must be rejected without emitting.
+    const outcome = store.transition({ taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", ts: NOW });
+    expect(outcome.ok).toBe(false);
+    expect(received).toHaveLength(0);
+  });
+});

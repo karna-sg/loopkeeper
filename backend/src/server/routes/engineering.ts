@@ -1,3 +1,4 @@
+import { watch } from "node:fs";
 import { open } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import type { AppDeps } from "../deps.ts";
@@ -199,6 +200,116 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
       throw err;
     } finally {
       await fh?.close();
+    }
+  });
+
+  // --- Live SSE stream (LP-71) ---
+
+  app.get("/tasks/:id/stream", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!engStore.get(id)) return reply.code(404).send({ error: "not found" });
+
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      // Omit explicit Connection: keep-alive so the server honours the client's Connection header
+      // (e.g. Connection: close from http.request({agent:false}) in tests). The stream keeps the
+      // connection alive while data is flowing; no explicit header is required.
+    });
+
+    const runs = engStore.agentRuns(id);
+    const run = runs.at(-1) ?? null;
+    let offset = 0;
+    let flushing = false;
+    let pending = false;
+
+    // Capture the TCP socket early. req.raw (IncomingMessage for a body-less GET) has its
+    // readable side already "ended", so its own 'close' event can be delayed. Listening
+    // directly on the net.Socket gives an immediate notification when the connection drops.
+    const rawSocket = req.raw.socket;
+
+    const sendData = (line: string): void => { res.write(`data: ${line}\n\n`); };
+    const sendEvent = (type: string, data: string): void => { res.write(`event: ${type}\ndata: ${data}\n\n`); };
+
+    const flushNewLines = async (): Promise<void> => {
+      if (res.writableEnded || flushing) { if (!res.writableEnded) pending = true; return; }
+      flushing = true;
+      try {
+        if (!run?.logPath) return;
+        const fh = await open(run.logPath, "r");
+        try {
+          const { size } = await fh.stat();
+          if (offset >= size) return;
+          const bytesToRead = Math.min(65536, size - offset);
+          const buf = Buffer.alloc(bytesToRead);
+          const { bytesRead } = await fh.read(buf, 0, bytesToRead, offset);
+          const chunk = buf.subarray(0, bytesRead).toString("utf8");
+          const lastNl = chunk.lastIndexOf("\n");
+          if (lastNl === -1) return;
+          const complete = chunk.slice(0, lastNl);
+          offset += Buffer.byteLength(complete, "utf8") + 1;
+          for (const raw of complete.split("\n")) {
+            const formatted = formatActivityLine(raw);
+            if (formatted !== null) {
+              for (const line of formatted.split("\n")) sendData(line);
+            }
+          }
+        } finally {
+          await fh.close();
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      } finally {
+        flushing = false;
+        if (pending) { pending = false; void flushNewLines(); }
+      }
+    };
+
+    // Replay the current tail on connect.
+    await flushNewLines();
+
+    // Watch the log file for appended lines.
+    let watcher: ReturnType<typeof watch> | null = null;
+    if (run?.logPath) {
+      watcher = watch(run.logPath, { persistent: false }, () => { void flushNewLines(); });
+    }
+
+    // Declare cleanup first (with no-op default) so onTransition can safely reference it.
+    let cleaned = false;
+    let cleanup: () => void = () => {};
+
+    // Heartbeat comment every 15s to keep proxies from closing the connection.
+    // unref() so this timer doesn't prevent the event loop from draining when the server closes.
+    const heartbeat = setInterval(() => { res.write(": heartbeat\n\n"); }, 15_000).unref();
+
+    // Forward transition events as SSE "status" events; close stream when terminal.
+    const onTransition = (evt: { taskId: string; stage: string; status: string }): void => {
+      if (evt.taskId !== id) return;
+      sendEvent("status", JSON.stringify({ stage: evt.stage, status: evt.status }));
+      const terminal =
+        evt.status === "cancelled" ||
+        (evt.stage === "verify" && evt.status === "verified") ||
+        (evt.stage === "rollback" && evt.status === "rolled_back");
+      if (terminal) cleanup();
+    };
+    engStore.transitionEmitter.on("transition", onTransition);
+
+    cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      clearInterval(heartbeat);
+      watcher?.close();
+      engStore.transitionEmitter.off("transition", onTransition);
+      rawSocket?.off("close", cleanup);
+      if (!res.writableEnded) res.end();
+    };
+    // Listen directly on the TCP socket for the most reliable disconnect notification.
+    if (rawSocket) {
+      rawSocket.on("close", cleanup);
+    } else {
+      req.raw.on("close", cleanup);
     }
   });
 

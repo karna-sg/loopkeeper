@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as http from "node:http";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -835,5 +836,137 @@ describe("PATCH /tasks/:id — per-task model override (LP-27)", () => {
   it("returns 404 for unknown task", async () => {
     const { app } = makeApp({ selfAccountId: "acct-1" });
     expect((await app.inject({ method: "PATCH", url: "/tasks/task_nonexistent", payload: { claudeModel: "claude-sonnet-4-6" } })).statusCode).toBe(404);
+  });
+});
+
+// --- SSE stream (LP-71) ---
+// Streaming tests require a real listening server (inject doesn't support hijacked SSE connections).
+
+describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
+  it("returns 404 for unknown task (pre-hijack path)", async () => {
+    const { app } = makeApp();
+    // The 404 branch returns before reply.hijack(), so app.inject() works here.
+    const res = await app.inject({ method: "GET", url: "/tasks/task_nope/stream" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("replays current log tail on connect and sets text/event-stream header", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("10001");
+
+    const logDir = mkdtempSync(join(tmpdir(), "lk-sse-"));
+    const logPath = join(logDir, "plan-sse.jsonl");
+    const logContent =
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Planning." }] } }) + "\n";
+    writeFileSync(logPath, logContent);
+    const runId = engStore.startAgentRun({ taskId: id, stage: "plan", sessionId: "sse-1", iteration: 1, startedTs: NOW });
+    engStore.finishAgentRun(runId, {
+      status: "succeeded", finishedTs: NOW, exitCode: 0, usdCents: 1, numTurns: 1, resultSummary: "done", logPath,
+    });
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as { port: number }).port;
+    try {
+      const { contentType, body } = await new Promise<{ contentType: string; body: string }>((resolve, reject) => {
+        const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
+          const ct = res.headers["content-type"] ?? "";
+          let data = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            data += chunk;
+            if (data.includes("data: text: Planning.")) {
+              resolve({ contentType: ct, body: data });
+              req.destroy(); // disconnect after we have what we need
+            }
+          });
+          res.on("end", () => resolve({ contentType: ct, body: data }));
+          res.on("error", (err) => reject(err));
+        });
+        req.on("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code !== "ECONNRESET") reject(err);
+        });
+        req.end();
+      });
+      expect(contentType).toContain("text/event-stream");
+      expect(body).toContain("data: text: Planning.");
+    } finally {
+      app.server.closeAllConnections();
+      await app.close();
+    }
+  });
+
+  it("emits a status SSE event when a transition fires, then closes the stream on terminal status", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("10001");
+    // Advance to a stage that can be transitioned
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as { port: number }).port;
+    try {
+      // Use http.request (not fetch) so we get direct socket control and reliable close detection.
+      const collected = await new Promise<string>((resolve, reject) => {
+        let data = "";
+        const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            data += chunk;
+            if (data.includes('"status":"cancelled"')) {
+              resolve(data);
+              req.destroy(); // client disconnect after collecting the event
+            }
+          });
+          res.on("end", () => resolve(data)); // server closed cleanly
+          res.on("error", (err) => reject(err));
+        });
+        // ECONNRESET is expected when cleanup() destroys the socket after sending the event.
+        req.on("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code === "ECONNRESET") resolve(data);
+          else reject(err);
+        });
+        // Fire a terminal transition 20ms after the connection is established.
+        setTimeout(() => {
+          engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+        }, 20);
+        req.end();
+      });
+
+      expect(collected).toContain("event: status");
+      expect(collected).toContain('"status":"cancelled"');
+    } finally {
+      app.server.closeAllConnections();
+      await app.close();
+    }
+  });
+
+  it("tears down the emitter listener and watcher when the stream ends", async () => {
+    const { app, engStore } = makeApp();
+    engStore.upsertFromJira([engInput()], NOW);
+    const id = taskId("10001");
+    // Pre-advance so the task is cancellable from in_progress.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+
+    expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
+
+    // Use inject rather than a real server to avoid app.close() hanging on the keep-alive socket
+    // that remains after res.end() in cleanup(). The inject Promise stays pending until cleanup()
+    // calls res.end(), which happens when we fire a terminal transition below.
+    const injectPromise = app.inject({ method: "GET", url: `/tasks/${id}/stream` });
+
+    // Poll until the async route handler has completed its setup and registered the listener.
+    const deadline = Date.now() + 1000;
+    while (engStore.transitionEmitter.listenerCount("transition") === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(engStore.transitionEmitter.listenerCount("transition")).toBe(1);
+
+    // Terminal transition → onTransition() → cleanup() → res.end() → inject resolves.
+    engStore.transition({ taskId: id, to: { stage: "plan", status: "cancelled" }, actor: "user", ts: NOW });
+
+    await injectPromise; // completes because cleanup() called res.end()
+
+    expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
   });
 });
