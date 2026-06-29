@@ -950,6 +950,11 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
 
     await app.listen({ port: 0, host: "127.0.0.1" });
     const port = (app.server.address() as { port: number }).port;
+
+    // Keep a reference to the client request so we can destroy its socket after the test body.
+    // Without this, cleanup() calls res.end() which puts the socket into keep-alive mode on the
+    // server side, and server.close() (inside app.close()) waits for that connection indefinitely.
+    let clientReq: http.ClientRequest | undefined;
     try {
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
 
@@ -961,6 +966,7 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
         });
         req.on("error", () => {}); // swallow errors emitted when the server closes the socket
         req.end();
+        clientReq = req;
       });
 
       // Poll until the emitter listener is registered.
@@ -978,6 +984,8 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
       // cleanup() is synchronous here — no await needed.
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
     } finally {
+      // Destroy the client socket so the server's keep-alive connection closes before app.close().
+      clientReq?.destroy();
       app.server.closeAllConnections();
       await app.close();
     }
