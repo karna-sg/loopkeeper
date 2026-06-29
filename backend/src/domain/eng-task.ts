@@ -231,6 +231,14 @@ export interface RollbackArtifact {
   logTail: string | null;
 }
 
+/** One acceptance-criterion result from the AC-check agent run (LP-33). */
+export interface AcCheckItem {
+  criterion: string;
+  pass: boolean;
+  /** One-sentence justification, redacted. */
+  evidence: string;
+}
+
 export interface TaskArtifacts {
   plan: PlanArtifact | null;
   dev: DevArtifact | null;
@@ -241,6 +249,7 @@ export interface TaskArtifacts {
   deploy: DeployArtifact | null;
   verify: VerifyArtifact | null;
   rollback: RollbackArtifact | null;
+  acCheck: AcCheckItem[] | null;
 }
 
 export const EMPTY_ARTIFACTS: TaskArtifacts = {
@@ -253,6 +262,7 @@ export const EMPTY_ARTIFACTS: TaskArtifacts = {
   deploy: null,
   verify: null,
   rollback: null,
+  acCheck: null,
 };
 
 /** Per-task cost + iteration caps (PRD §8/§9). All counters accumulate; the worker escalates at a cap. */

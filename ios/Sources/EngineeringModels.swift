@@ -105,6 +105,13 @@ struct RollbackArtifact: Codable, Hashable {
     let logTail: String?
 }
 
+struct AcCheckItem: Codable, Hashable, Identifiable {
+    let criterion: String?
+    let pass: Bool?
+    let evidence: String?
+    var id: String { criterion ?? "" }
+}
+
 struct TaskArtifacts: Codable, Hashable {
     let plan: PlanArtifact?
     let dev: DevArtifact?
@@ -115,6 +122,7 @@ struct TaskArtifacts: Codable, Hashable {
     let deploy: DeployArtifact?
     let verify: VerifyArtifact?
     let rollback: RollbackArtifact?
+    let acCheck: [AcCheckItem]?
 }
 
 struct TaskBudget: Codable, Hashable {

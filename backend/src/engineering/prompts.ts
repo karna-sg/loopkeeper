@@ -1,5 +1,6 @@
 /** Prompt builders for the Claude Code stages. Kept pure + small so they're easy to tune/test. */
 import type { EngTask, ReviewComment } from "../domain/eng-task.ts";
+import type { DiffFile } from "./ports.ts";
 
 function requirements(task: EngTask): string {
   const ac = task.acceptanceCriteria ? `\n\nAcceptance criteria:\n${task.acceptanceCriteria}` : "";
@@ -62,6 +63,38 @@ export function renderColdStartPrompt(task: EngTask, branchLog: string): string 
     branchLog || "(no commits yet)",
     ``,
     requirements(task),
+  ].join("\n");
+}
+
+function formatDiff(files: DiffFile[]): string {
+  if (files.length === 0) return "(no diff available)";
+  return files
+    .map((f) => {
+      const header = `--- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`;
+      const hunks = f.hunks
+        .map((h) => [h.header, ...h.lines.map((l) => `${l.type}${l.text}`)].join("\n"))
+        .join("\n");
+      return hunks ? `${header}\n${hunks}` : header;
+    })
+    .join("\n\n");
+}
+
+/** Fresh-session prompt for the AC verification run (LP-33). Agent must return ONLY a JSON array. */
+export function renderAcCheckPrompt(task: EngTask, diff: DiffFile[]): string {
+  const ac = task.acceptanceCriteria ?? "(no acceptance criteria recorded)";
+  return [
+    `You are verifying whether a code change satisfies acceptance criteria.`,
+    `Read the diff and evaluate each criterion independently.`,
+    `Output ONLY a JSON array — no prose, no markdown fences.`,
+    `Each element: { "criterion": "<text>", "pass": true|false, "evidence": "<one sentence why>" }`,
+    ``,
+    `Task: ${task.jiraKey} — ${task.title}`,
+    ``,
+    `Acceptance criteria:`,
+    ac,
+    ``,
+    `Code diff:`,
+    formatDiff(diff),
   ].join("\n");
 }
 

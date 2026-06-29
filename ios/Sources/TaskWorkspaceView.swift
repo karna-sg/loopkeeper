@@ -307,9 +307,39 @@ struct TaskWorkspaceView: View {
                 Text(diff).font(monoSmall).foregroundStyle(.tertiary).textSelection(.enabled)
             }
         }
+        acCheckList(task)
         diffExpander(task)
         actionButton("approve & open PR", .green) { await model.approvePR(task); await reload() }
         Text("This opens a public PR on GitHub.").font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func acCheckList(_ task: EngTask) -> some View {
+        if let items = task.artifacts?.acCheck, !items.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ac check:").font(monoSmall).foregroundStyle(.secondary)
+                ForEach(items) { item in
+                    let passed = item.pass == true
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(passed ? "✓" : "✗")
+                            .font(monoSmall)
+                            .foregroundStyle(passed ? Theme.mdStrong : Color.red)
+                            .frame(width: 12, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.criterion ?? "—")
+                                .font(monoSmall)
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                            if let ev = item.evidence, !ev.isEmpty {
+                                Text(ev)
+                                    .font(monoSmall)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder private func reviewGate(_ task: EngTask) -> some View {
