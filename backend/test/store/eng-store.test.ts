@@ -313,7 +313,7 @@ describe("EngStore: labels", () => {
 
     const list = store.listLabels();
     expect(list).toHaveLength(1);
-    expect(list[0].id).toBe(lbl.id);
+    expect(list[0]!.id).toBe(lbl.id);
   });
 
   it("updateLabel patches name and color", () => {
@@ -321,7 +321,7 @@ describe("EngStore: labels", () => {
     const updated = store.updateLabel(lbl.id, { name: "P1", color: "#61BD4F" });
     expect(updated?.name).toBe("P1");
     expect(updated?.color).toBe("#61BD4F");
-    expect(store.listLabels()[0].name).toBe("P1");
+    expect(store.listLabels()[0]!.name).toBe("P1");
   });
 
   it("updateLabel returns null for unknown id", () => {

@@ -583,7 +583,7 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     }
   });
 
-  app.delete("/labels/:labelId", async (req, reply) => {
+  app.delete("/labels/:labelId", async (req) => {
     const { labelId } = req.params as { labelId: string };
     engStore.deleteLabel(labelId);
     return { ok: true };
@@ -613,7 +613,7 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
 
   // --- Label queue order ---
 
-  app.get("/labels/:labelId/order", async (req, reply) => {
+  app.get("/labels/:labelId/order", async (req) => {
     const { labelId } = req.params as { labelId: string };
     const jiraIds = engStore.labelTaskOrder(labelId);
     return { jiraIds };
