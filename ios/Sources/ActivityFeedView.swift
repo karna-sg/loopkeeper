@@ -30,14 +30,14 @@ struct ActivityFeedView: View {
                     .foregroundStyle(.tertiary)
             } else if !lines.isEmpty {
                 ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
+                    ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                                 Text(line)
                                     .font(mono)
                                     .foregroundStyle(lineColor(line))
                                     .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             Color.clear.frame(height: 1).id(bottomID)
                         }
