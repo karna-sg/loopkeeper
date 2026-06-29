@@ -535,6 +535,7 @@ describe("orchestrator: per-task model selection (LP-27)", () => {
 // ─── LP-33: AC check at the PR gate ──────────────────────────────────────────
 
 class AcCheckRunner {
+  ok = true; // required to match FakeAgentRunner's structural type for harness()
   calls: AgentRunArgs[] = [];
   async run(args: AgentRunArgs): Promise<AgentRunResult> {
     this.calls.push(args);
@@ -568,8 +569,10 @@ describe("orchestrator: AC check on pr:proposed (LP-33)", () => {
     const acCheck = engStore.get(id)!.artifacts.acCheck;
     expect(acCheck).not.toBeNull();
     expect(acCheck).toHaveLength(1);
-    expect(acCheck![0]).toMatchObject({ criterion: "It works.", pass: true });
-    expect(acCheck![0].evidence).toBeTruthy();
+    const item = acCheck![0];
+    expect(item).toBeDefined();
+    expect(item).toMatchObject({ criterion: "It works.", pass: true });
+    expect(item!.evidence).toBeTruthy();
   });
 
   it("AC check run is always fresh (resume: false, stage: pr)", async () => {
