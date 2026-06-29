@@ -509,7 +509,7 @@ describe("orchestrator: logPath propagation (LP-42)", () => {
 
     const runs = engStore.agentRuns(id);
     expect(runs).toHaveLength(1);
-    expect(runs[0].logPath).toBe(LOG_PATH);
+    expect(runs[0]!.logPath).toBe(LOG_PATH);
   });
 
   it("persists logPath from dev runner result to eng_agent_runs", async () => {
@@ -560,7 +560,7 @@ describe("orchestrator: logPath propagation (LP-42)", () => {
 
     const runs = engStore.agentRuns(id);
     expect(runs).toHaveLength(1);
-    expect(runs[0].logPath).toBe(LOG_PATH);
+    expect(runs[0]!.logPath).toBe(LOG_PATH);
   });
 });
 
