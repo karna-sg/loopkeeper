@@ -950,23 +950,22 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
 
     await app.listen({ port: 0, host: "127.0.0.1" });
     const port = (app.server.address() as { port: number }).port;
-
-    // Keep a reference to the client request so we can destroy its socket after the test body.
-    // Without this, cleanup() calls res.end() which puts the socket into keep-alive mode on the
-    // server side, and server.close() (inside app.close()) waits for that connection indefinitely.
-    let clientReq: http.ClientRequest | undefined;
     try {
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
 
-      // Open an SSE connection and wait until the server-side handler registers its listener.
+      // agent:false adds "Connection: close" to the request, so the server closes the TCP socket
+      // after res.end() instead of returning it to the keep-alive pool. Without this, app.close()
+      // would wait indefinitely for the idle keep-alive socket to drain.
       await new Promise<void>((resolve) => {
-        const req = http.request({ hostname: "127.0.0.1", port, path: `/tasks/${id}/stream` }, (res) => {
-          res.resume(); // drain so the server write side never stalls
-          resolve(); // headers received — server handler is executing
-        });
+        const req = http.request(
+          { hostname: "127.0.0.1", port, path: `/tasks/${id}/stream`, agent: false },
+          (res) => {
+            res.resume(); // drain so the server write side never stalls
+            resolve(); // headers received — server handler is executing
+          },
+        );
         req.on("error", () => {}); // swallow errors emitted when the server closes the socket
         req.end();
-        clientReq = req;
       });
 
       // Poll until the emitter listener is registered.
@@ -984,8 +983,6 @@ describe("GET /tasks/:id/stream — SSE (LP-71)", () => {
       // cleanup() is synchronous here — no await needed.
       expect(engStore.transitionEmitter.listenerCount("transition")).toBe(0);
     } finally {
-      // Destroy the client socket so the server's keep-alive connection closes before app.close().
-      clientReq?.destroy();
       app.server.closeAllConnections();
       await app.close();
     }
