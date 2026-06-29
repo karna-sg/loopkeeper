@@ -12,61 +12,79 @@ struct EngInsightsView: View {
             List {
                 if loading {
                     HStack { Spacer(); ProgressView(); Spacer() }
+                        .listRowBackground(Color.clear)
                 } else if let stats {
                     content(stats)
                 } else {
                     ContentUnavailableView("No insights", systemImage: "cpu", description: Text("Couldn't load eng stats — check the connection."))
+                        .listRowBackground(Color.clear)
                 }
             }
-            .navigationTitle("Eng Insights")
+            .terminalListBackground()
+            .navigationTitle("eng insights")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
+            }
             .task { stats = await model.engStats(); loading = false }
         }
     }
 
     @ViewBuilder private func content(_ s: EngStats) -> some View {
-        Section("Throughput") {
-            LabeledContent("Shipped (all time)", value: "\(s.shipped.total)")
-            LabeledContent("Last 7 days", value: "\(s.shipped.last7)")
-            LabeledContent("Last 30 days", value: "\(s.shipped.last30)")
-            LabeledContent("In-flight", value: "\(s.inFlight.total)")
+        Section {
+            TerminalStatRow(label: "shipped (all time)", value: "\(s.shipped.total)")
+            TerminalStatRow(label: "last 7 days", value: "\(s.shipped.last7)")
+            TerminalStatRow(label: "last 30 days", value: "\(s.shipped.last30)")
+            TerminalStatRow(label: "in-flight", value: "\(s.inFlight.total)")
+        } header: {
+            TerminalSectionHeader("# throughput")
         }
-        Section("Velocity") {
-            LabeledContent("Median time to PR", value: s.medianTimeToPrHours.map(humanHours) ?? "—")
-            LabeledContent("Median time to merge", value: s.medianTimeToMergeHours.map(humanHours) ?? "—")
+        .listRowBackground(Color.clear)
+
+        Section {
+            TerminalStatRow(label: "median time to pr", value: s.medianTimeToPrHours.map(humanHours) ?? "—")
+            TerminalStatRow(label: "median time to merge", value: s.medianTimeToMergeHours.map(humanHours) ?? "—")
+        } header: {
+            TerminalSectionHeader("# velocity")
         }
-        Section("Review") {
-            LabeledContent("Median review rounds",
-                value: s.medianReviewRounds.map { String(format: "%.1f", $0) } ?? "—")
+        .listRowBackground(Color.clear)
+
+        Section {
+            TerminalStatRow(label: "median review rounds",
+                            value: s.medianReviewRounds.map { String(format: "%.1f", $0) } ?? "—")
+        } header: {
+            TerminalSectionHeader("# review")
         }
+        .listRowBackground(Color.clear)
+
         // Subscription detection: last30 spend is $0 despite shipped work → running on subscription OAuth.
         let onSubscription = s.spend.last30UsdCents == 0 && s.shipped.total > 0
-        Section("Spend") {
+        Section {
             if onSubscription {
-                LabeledContent("Last 7 days", value: "n/a on subscription")
-                LabeledContent("Last 30 days", value: "n/a on subscription")
-                LabeledContent("Total iterations", value: "\(s.spend.totalIterations)")
+                TerminalStatRow(label: "last 7 days", value: "n/a on subscription")
+                TerminalStatRow(label: "last 30 days", value: "n/a on subscription")
+                TerminalStatRow(label: "total iterations", value: "\(s.spend.totalIterations)")
             } else {
-                LabeledContent("Last 7 days", value: formatCents(s.spend.last7UsdCents))
-                LabeledContent("Last 30 days", value: formatCents(s.spend.last30UsdCents))
+                TerminalStatRow(label: "last 7 days", value: formatCents(s.spend.last7UsdCents))
+                TerminalStatRow(label: "last 30 days", value: formatCents(s.spend.last30UsdCents))
             }
+        } header: {
+            TerminalSectionHeader("# spend")
         }
+        .listRowBackground(Color.clear)
+
         if !s.byWeek.isEmpty {
-            Section("Shipped per week") {
+            Section {
                 let peak = max(s.byWeek.map(\.shipped).max() ?? 1, 1)
                 ForEach(s.byWeek) { w in
-                    HStack(spacing: 8) {
-                        Text(w.week).font(.caption).foregroundStyle(.secondary).frame(width: 78, alignment: .leading)
-                        GeometryReader { geo in
-                            Capsule().fill(.tint)
-                                .frame(width: max(6, geo.size.width * CGFloat(w.shipped) / CGFloat(peak)))
-                        }
-                        .frame(height: 10)
-                        Text("\(w.shipped)").font(.caption).monospacedDigit()
-                    }
+                    TerminalBarRow(label: w.week, value: w.shipped, peak: peak)
                 }
+            } header: {
+                TerminalSectionHeader("# shipped_per_week")
             }
+            .listRowBackground(Color.clear)
         }
     }
 

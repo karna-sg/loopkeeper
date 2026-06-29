@@ -13,23 +13,34 @@ struct StandupView: View {
         NavigationStack {
             ScrollView {
                 Text(text)
-                    .font(.callout.monospaced())
+                    .font(.mono)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
-            .navigationTitle("Standup")
+            .background(Theme.terminalBG.ignoresSafeArea())
+            .navigationTitle("standup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    TerminalDoneButton { dismiss() }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { UIPasteboard.general.string = text; Haptics.success() } label: { Label("Copy", systemImage: "doc.on.doc") }
-                        .disabled(!ready)
+                    Button {
+                        UIPasteboard.general.string = text
+                        Haptics.success()
+                    } label: {
+                        Text("[ copy ]")
+                            .font(.mono)
+                            .foregroundStyle(Theme.headerAccent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!ready)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 Text("Copy-only — Loopkeeper never posts this for you.")
-                    .font(.caption2).foregroundStyle(.secondary).padding(.bottom, 8)
+                    .font(.monoSmall).foregroundStyle(.tertiary).padding(.bottom, 8)
             }
         }
         .task { text = await model.standupText(); ready = true }

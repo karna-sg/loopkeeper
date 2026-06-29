@@ -22,7 +22,7 @@ struct LabelsView: View {
                                 .fill(Theme.labelColor(lbl.color))
                                 .frame(width: 12, height: 12)
                             Text(lbl.name)
-                                .font(.system(size: 14, design: .monospaced))
+                                .font(.mono)
                             Spacer()
                             Button {
                                 editingLabel = lbl
@@ -40,17 +40,15 @@ struct LabelsView: View {
                         }
                     }
                 } header: {
-                    Text("labels")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.headerAccent)
-                        .textCase(nil)
+                    TerminalSectionHeader("# labels")
                 }
+                .listRowBackground(Color.clear)
 
                 Section {
-                    TextField("Label name", text: $newName)
-                        .font(.system(size: 13, design: .monospaced))
+                    TextField("label name", text: $newName)
+                        .font(.mono)
                     ColorPaletteRow(selected: $newColor)
-                    Button("Create label") {
+                    TerminalActionButton(title: "create label") {
                         guard !newName.isEmpty else { return }
                         let name = newName; let color = newColor
                         newName = ""
@@ -58,18 +56,16 @@ struct LabelsView: View {
                     }
                     .disabled(newName.isEmpty)
                 } header: {
-                    Text("new label")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.headerAccent)
-                        .textCase(nil)
+                    TerminalSectionHeader("# new label")
                 }
+                .listRowBackground(Color.clear)
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Labels")
+            .terminalListBackground()
+            .navigationTitle("labels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    TerminalDoneButton { dismiss() }
                 }
             }
             .sheet(item: $editingLabel) { lbl in
@@ -93,18 +89,27 @@ private struct EditLabelSheet: View {
             Form {
                 Section("Name") {
                     TextField("Label name", text: $name)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.mono)
                 }
                 Section("Color") {
                     ColorPaletteRow(selected: $color)
                 }
             }
-            .navigationTitle("Edit label")
+            .navigationTitle("edit label")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: {
+                        Text("[ cancel ]").font(.mono).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { onSave(); dismiss() }.disabled(name.isEmpty)
+                    Button { onSave(); dismiss() } label: {
+                        Text("[ save ]").font(.mono).foregroundStyle(Theme.headerAccent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(name.isEmpty)
                 }
             }
         }

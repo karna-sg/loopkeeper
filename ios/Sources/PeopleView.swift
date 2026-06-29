@@ -34,24 +34,31 @@ struct PeopleView: View {
             List {
                 if people.isEmpty {
                     ContentUnavailableView("No people yet", systemImage: "person.2", description: Text("Loops with a named counterpart appear here."))
+                        .listRowBackground(Color.clear)
                 } else {
                     ForEach(people) { person in
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(person.name).font(.body)
+                            Text(person.name).font(.mono)
                             HStack(spacing: 10) {
-                                if person.owe > 0 { Text("You owe \(person.owe)") }
-                                if person.owed > 0 { Text("Waiting on \(person.owed)").foregroundStyle(.teal) }
+                                if person.owe > 0 { Text("you owe \(person.owe)") }
+                                if person.owed > 0 { Text("waiting on \(person.owed)").foregroundStyle(.teal) }
                                 if person.overdue > 0 { Text("\(person.overdue) overdue").foregroundStyle(.red) }
                             }
-                            .font(.caption)
+                            .font(.monoSmall)
                             .foregroundStyle(.secondary)
                         }
                     }
+                    .listRowBackground(Color.clear)
                 }
             }
-            .navigationTitle("People")
+            .terminalListBackground()
+            .navigationTitle("people")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
+            }
         }
     }
 }

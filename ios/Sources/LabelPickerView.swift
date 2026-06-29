@@ -16,6 +16,7 @@ struct LabelPickerView: View {
                         systemImage: "tag",
                         description: Text("Create labels from ⋯ → Manage labels, then attach them here.")
                     )
+                    .background(Theme.terminalBG.ignoresSafeArea())
                 } else {
                     List {
                         ForEach(model.labels) { lbl in
@@ -34,7 +35,7 @@ struct LabelPickerView: View {
                                         .fill(Theme.labelColor(lbl.color))
                                         .frame(width: 12, height: 12)
                                     Text(lbl.name)
-                                        .font(.system(size: 14, design: .monospaced))
+                                        .font(.mono)
                                         .foregroundStyle(.primary)
                                     Spacer()
                                     if attached {
@@ -45,14 +46,17 @@ struct LabelPickerView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        .listRowBackground(Color.clear)
                     }
-                    .listStyle(.insetGrouped)
+                    .terminalListBackground()
                 }
             }
-            .navigationTitle("Labels — \(task.jiraKey)")
+            .navigationTitle("labels — \(task.jiraKey)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
             }
         }
     }

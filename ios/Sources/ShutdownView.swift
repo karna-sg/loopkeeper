@@ -16,28 +16,42 @@ struct ShutdownView: View {
             List {
                 Section {
                     Text("Clear the deck before you log off. Decide each one: done, push, or drop.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.mono).foregroundStyle(.secondary)
                 }
+                .listRowBackground(Color.clear)
+
                 if loops.isEmpty {
                     ContentUnavailableView("All clear", systemImage: "moon.zzz", description: Text("Nothing you owe is overdue or due today. Good place to stop."))
+                        .listRowBackground(Color.clear)
                 } else {
                     ForEach(loops) { loop in
                         VStack(alignment: .leading, spacing: 10) {
                             LoopRow(loop: loop)
-                            HStack(spacing: 8) {
-                                Button { Task { await model.markDone(loop) } } label: { Label("Done", systemImage: "checkmark") }.tint(.green)
-                                Button { Task { await model.snooze(loop, days: 1) } } label: { Label("Tomorrow", systemImage: "clock") }.tint(.orange)
-                                Button(role: .destructive) { Task { await model.dismiss(loop) } } label: { Label("Drop", systemImage: "trash") }
+                            HStack(spacing: 16) {
+                                TerminalActionButton(title: "done", tint: .green) {
+                                    Task { await model.markDone(loop) }
+                                }
+                                TerminalActionButton(title: "tomorrow", tint: .orange) {
+                                    Task { await model.snooze(loop, days: 1) }
+                                }
+                                TerminalActionButton(title: "drop", tint: .red) {
+                                    Task { await model.dismiss(loop) }
+                                }
                             }
-                            .buttonStyle(.bordered).controlSize(.small)
                         }
                         .padding(.vertical, 2)
                     }
+                    .listRowBackground(Color.clear)
                 }
             }
-            .navigationTitle("Wind down")
+            .terminalListBackground()
+            .navigationTitle("wind down")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
+            }
         }
     }
 }

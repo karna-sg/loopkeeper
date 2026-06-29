@@ -13,17 +13,32 @@ struct ArchiveView: View {
             List {
                 if loading {
                     HStack { Spacer(); ProgressView(); Spacer() }
+                        .listRowBackground(Color.clear)
                 } else if loops.isEmpty {
                     ContentUnavailableView("Nothing closed yet", systemImage: "checkmark.circle", description: Text("Loops you complete or dismiss show up here."))
+                        .listRowBackground(Color.clear)
                 } else {
                     ForEach(grouped, id: \.day) { group in
-                        Section(group.day) { ForEach(group.loops) { row($0) } }
+                        Section {
+                            ForEach(group.loops) { row($0) }
+                        } header: {
+                            Text(group.day)
+                                .font(.monoHdr)
+                                .foregroundStyle(Theme.headerAccent)
+                                .textCase(nil)
+                        }
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
-            .navigationTitle("Completed")
+            .terminalListBackground()
+            .navigationTitle("completed")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalDoneButton { dismiss() }
+                }
+            }
             .task { loops = await model.archive(); loading = false }
         }
     }
@@ -33,8 +48,10 @@ struct ArchiveView: View {
             Image(systemName: loop.status == "dismissed" ? "trash" : "checkmark.circle.fill")
                 .foregroundStyle(loop.status == "dismissed" ? Color.secondary : .green)
             VStack(alignment: .leading, spacing: 2) {
-                Text(loop.summary).lineLimit(2)
-                if let sub = subtitle(loop) { Text(sub).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                Text(loop.summary).font(.mono).lineLimit(2)
+                if let sub = subtitle(loop) {
+                    Text(sub).font(.monoSmall).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
         }
     }
