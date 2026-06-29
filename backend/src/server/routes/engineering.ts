@@ -304,6 +304,10 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
       engStore.transitionEmitter.off("transition", onTransition);
       rawSocket?.off("close", cleanup);
       if (!res.writableEnded) res.end();
+      // Send TCP FIN so the server's connection count reaches zero and server.close() resolves.
+      // end() (half-close) is used instead of destroy() to ensure all buffered SSE data is
+      // delivered before the connection closes.
+      if (rawSocket && !rawSocket.destroyed) rawSocket.end();
     };
     // Listen directly on the TCP socket for the most reliable disconnect notification.
     if (rawSocket) {
