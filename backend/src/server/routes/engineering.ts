@@ -214,7 +214,9 @@ export function registerEngineering(app: FastifyInstance, deps: AppDeps): void {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
+      // Omit explicit Connection: keep-alive so the server honours the client's Connection header
+      // (e.g. Connection: close from http.request({agent:false}) in tests). The stream keeps the
+      // connection alive while data is flowing; no explicit header is required.
     });
 
     const runs = engStore.agentRuns(id);
