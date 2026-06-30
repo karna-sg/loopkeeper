@@ -106,8 +106,11 @@ struct APIClient {
     /// SSE stream from GET /tasks/:id/stream. Yields one event per complete SSE block.
     /// Heartbeat comment lines (starting with ":") are silently dropped.
     func taskStream(_ id: String) -> AsyncThrowingStream<SSEEvent, Error> {
-        var req = makeRequest("/tasks/\(id)/stream", method: "GET", json: false)
-        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        let req: URLRequest = {
+            var r = makeRequest("/tasks/\(id)/stream", method: "GET", json: false)
+            r.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            return r
+        }()
         return AsyncThrowingStream { continuation in
             let urlTask = Task {
                 do {
