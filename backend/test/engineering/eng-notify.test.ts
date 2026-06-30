@@ -35,7 +35,7 @@ describe("EngNotifier", () => {
 
     // Advance to a new needs-human status → pushes again.
     store.transition({ taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW });
-    store.setArtifact(id, { pr: { title: "LK-1: do it", body: "b", diffSummary: "", url: null, number: null, proposedTs: NOW, createdTs: null, approvedBy: null } }, NOW);
+    store.setArtifact(id, { pr: { title: "LK-1: do it", body: "b", diffSummary: "", url: null, number: null, proposedTs: NOW, createdTs: null, approvedBy: null, selfReview: null } }, NOW);
     // Drive to pr:proposed (needs-human).
     for (const s of [
       { stage: "dev", status: "in_progress" },

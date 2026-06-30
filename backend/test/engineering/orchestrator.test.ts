@@ -963,7 +963,7 @@ describe("orchestrator: self-review on pr:proposed (LP-46)", () => {
 
   it("advances to pr:proposed even when self-review critic run fails entirely", async () => {
     class FailingSelfReviewRunner extends SelfReviewRunner {
-      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+      override async run(args: AgentRunArgs): Promise<AgentRunResult> {
         if (args.stage === "pr" && args.resume) throw new Error("critic exploded");
         return super.run(args);
       }
