@@ -181,7 +181,7 @@ describe("EngStore: artifacts + budget", () => {
   });
 
   it("merge-patches artifacts without clobbering other stages", () => {
-    const plan: PlanArtifact = { text: "the plan", editedText: null, sessionId: "sess-1", revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null };
+    const plan: PlanArtifact = { text: "the plan", editedText: null, sessionId: "sess-1", revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null, qualityScore: null };
     store.setArtifact(id, { plan }, NOW);
     store.setArtifact(id, { test: { runs: [{ ts: NOW, passed: true, total: 42, failed: 0, summary: "42/42" }], lastPassed: true } }, NOW);
     const t = store.get(id)!;

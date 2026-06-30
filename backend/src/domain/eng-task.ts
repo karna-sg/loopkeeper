@@ -116,6 +116,8 @@ export interface PlanArtifact {
   generatedTs: string;
   approvedTs: string | null;
   approvedBy: string | null;
+  /** Advisory quality score [0,1] from the inline LLM-as-judge (LP-101). Null when judge did not run or failed. */
+  qualityScore: number | null;
 }
 
 export interface DevArtifact {

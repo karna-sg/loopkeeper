@@ -55,4 +55,27 @@ describe("EngNotifier", () => {
     const notifier = new EngNotifier(store, push, () => ["devtok"]);
     expect((await notifier.run()).sent).toBe(0);
   });
+
+  it("includes quality score in plan-ready notification title when present (LP-101)", async () => {
+    store.upsertFromJira([input("LK-2", "10002")], NOW);
+    const id = taskId("10002");
+    store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    store.setArtifact(id, { plan: { text: "the plan", editedText: null, sessionId: null, revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null, qualityScore: 0.87 } }, NOW);
+    store.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
+
+    const notifier = new EngNotifier(store, push, () => ["devtok"]);
+    await notifier.run();
+    expect(push.sent[0]?.payload.title).toBe("Plan ready (0.87) · LK-2");
+  });
+
+  it("omits score from plan-ready title when judge did not run (LP-101)", async () => {
+    store.upsertFromJira([input("LK-3", "10003")], NOW);
+    const id = taskId("10003");
+    store.transition({ taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW });
+    store.transition({ taskId: id, to: { stage: "plan", status: "completed_unapproved" }, actor: "agent", ts: NOW });
+
+    const notifier = new EngNotifier(store, push, () => ["devtok"]);
+    await notifier.run();
+    expect(push.sent[0]?.payload.title).toBe("Plan ready · LK-3");
+  });
 });

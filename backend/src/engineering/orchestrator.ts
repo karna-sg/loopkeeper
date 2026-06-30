@@ -3,7 +3,7 @@ import type { EngStore, TransitionArgs, TransitionOutcome } from "../store/eng-s
 import type { AcCheckItem, EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
 import { effectsFor, shouldRetryAfterTestFailure } from "./state-machine.ts";
 import { redactSecrets } from "../redact.ts";
-import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt } from "./prompts.ts";
+import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanJudgePrompt, renderPlanPrompt } from "./prompts.ts";
 import type { AgentRunner, DeployerPort, DiffFile, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
 
 export interface OrchestratorDeps {
@@ -155,11 +155,19 @@ export class Orchestrator {
     engStore.addBudgetUsage(taskId, { usdCents: run.usdCents }, now());
     if (!run.ok) throw new Error(run.error ?? "plan run failed");
 
-    engStore.setArtifact(
-      taskId,
-      { plan: { text: redactSecrets(run.finalText), editedText: null, sessionId: run.sessionId, revision: task.artifacts.plan?.revision ?? 0, generatedTs: now(), approvedTs: null, approvedBy: null } },
-      now(),
-    );
+    const planArt = { text: redactSecrets(run.finalText), editedText: null, sessionId: run.sessionId, revision: task.artifacts.plan?.revision ?? 0, generatedTs: now(), approvedTs: null, approvedBy: null, qualityScore: null as number | null };
+    engStore.setArtifact(taskId, { plan: planArt }, now());
+
+    // Best-effort quality judge (LP-101): never throws, never blocks the advance.
+    try {
+      const score = await this.#runPlanJudge(planArt.text, task, ws.path);
+      if (score != null) {
+        engStore.setArtifact(taskId, { plan: { ...planArt, qualityScore: score } }, now());
+      }
+    } catch {
+      // Advisory only; plan flow continues unchanged.
+    }
+
     this.#advance(taskId, { stage: "plan", status: "completed_unapproved" });
   }
 
@@ -427,6 +435,57 @@ export class Orchestrator {
 
   #branchUrl(task: EngTask, branch: string): string | null {
     return task.repo ? `https://github.com/${task.repo}/tree/${branch}` : null;
+  }
+
+  /**
+   * LP-101: Fresh Haiku judge call that scores the plan on coverage / localization / scope-fit.
+   * Returns a clamped [0,1] score, or null when the run fails or the response is not parseable.
+   * The caller wraps this in try/catch so any exception also degrades gracefully.
+   */
+  async #runPlanJudge(planText: string, task: EngTask, worktreePath: string): Promise<number | null> {
+    const { agentRunner, engStore, now } = this.#d;
+    const sessionId = randomUUID();
+    const runId = engStore.startAgentRun({ taskId: task.id, stage: "plan", sessionId, iteration: 0, startedTs: now() });
+
+    let run: Awaited<ReturnType<AgentRunner["run"]>>;
+    try {
+      run = await agentRunner.run({
+        taskId: task.id,
+        stage: "plan",
+        sessionId,
+        worktreePath,
+        mode: "plan",
+        resume: false,
+        prompt: renderPlanJudgePrompt(planText, task),
+        model: "claude-haiku-4-5-20251001",
+      });
+    } catch (err) {
+      engStore.finishAgentRun(runId, { status: "failed", finishedTs: now(), error: String(err) });
+      return null;
+    }
+
+    engStore.finishAgentRun(runId, {
+      status: run.ok ? "succeeded" : "failed",
+      finishedTs: now(),
+      exitCode: run.exitCode,
+      usdCents: run.usdCents,
+      numTurns: run.numTurns,
+      resultSummary: truncate(run.finalText, 200),
+      sessionId: run.sessionId,
+      ...(run.error ? { error: run.error } : {}),
+    });
+    engStore.addBudgetUsage(task.id, { usdCents: run.usdCents }, now());
+
+    if (!run.ok || !run.finalText) return null;
+
+    try {
+      const parsed = JSON.parse(run.finalText.trim()) as { score?: unknown };
+      const score = Number(parsed.score);
+      if (!Number.isFinite(score)) return null;
+      return Math.max(0, Math.min(1, score));
+    } catch {
+      return null;
+    }
   }
 
   /**
