@@ -508,8 +508,10 @@ describe("orchestrator: logPath propagation (LP-42)", () => {
     await drain(worker);
 
     const runs = engStore.agentRuns(id);
-    expect(runs).toHaveLength(1);
-    expect(runs[0]!.logPath).toBe(LOG_PATH);
+    // The plan stage produces two runs: the plan generation run and the quality-judge run (LP-101).
+    const planRun = runs.find((r) => r.logPath === LOG_PATH);
+    expect(planRun).toBeDefined();
+    expect(planRun!.logPath).toBe(LOG_PATH);
   });
 
   it("persists logPath from dev runner result to eng_agent_runs", async () => {
