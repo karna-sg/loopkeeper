@@ -332,7 +332,7 @@ describe("orchestrator: deploy disabled is a no-op", () => {
       { stage: "merge", status: "ready", actor: "system" },
       { stage: "merge", status: "merging", gate: true, actor: "user" },
     ];
-    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null } }, NOW);
+    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null, selfReview: null } }, NOW);
     for (const s of path) {
       const r = engStore.transition({ taskId: id, to: { stage: s.stage, status: s.status }, actor: s.actor, ...(s.gate ? { gateApproved: true } : {}), ts: NOW });
       expect(r.ok, `${s.stage}:${s.status}`).toBe(true);
@@ -365,7 +365,7 @@ describe("orchestrator: github-actions deploy mode observes (no SSH)", () => {
       { stage: "merge", status: "ready", actor: "system" },
       { stage: "merge", status: "merging", gate: true, actor: "user" },
     ];
-    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null } }, NOW);
+    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null, selfReview: null } }, NOW);
     for (const s of path) {
       const r = engStore.transition({ taskId: id, to: { stage: s.stage, status: s.status }, actor: s.actor, ...(s.gate ? { gateApproved: true } : {}), ts: NOW });
       expect(r.ok, `${s.stage}:${s.status}`).toBe(true);
@@ -397,7 +397,7 @@ describe("orchestrator: verify + rollback stages", () => {
     { stage: "merge", status: "merging", gate: true, actor: "user" },
   ];
   function seedToMerging(engStore: EngStore, id: string): void {
-    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null } }, NOW);
+    engStore.setArtifact(id, { pr: { title: "t", body: "b", diffSummary: "", url: "u", number: 7, proposedTs: NOW, createdTs: NOW, approvedBy: null, selfReview: null } }, NOW);
     for (const s of PATH_TO_MERGING) {
       const r = engStore.transition({ taskId: id, to: { stage: s.stage, status: s.status }, actor: s.actor, ...(s.gate ? { gateApproved: true } : {}), ts: NOW });
       expect(r.ok, `${s.stage}:${s.status}`).toBe(true);
@@ -807,5 +807,176 @@ describe("orchestrator: plan quality judge (LP-101)", () => {
     expect(judgeCall).toBeDefined();
     expect(judgeCall!.resume).toBe(false);
     expect(judgeCall!.model).toBe("claude-haiku-4-5-20251001");
+  });
+});
+
+// ─── LP-46: coder-critic self-review at pr:proposed ──────────────────────────
+
+const SELF_REVIEW_MUST_FIX = JSON.stringify({
+  mustFix: [{ description: "Missing null check in handler", file: "backend/src/server/routes/foo.ts" }],
+  nits: ["rename variable"],
+  summary: "Implementation mostly correct but missing a guard.",
+});
+
+const SELF_REVIEW_CLEAN = JSON.stringify({
+  mustFix: [],
+  nits: [],
+  summary: "Implementation looks good.",
+});
+
+/** Runner that returns self-review JSON for the first stage:pr resume:true call, AC check JSON for
+ *  stage:pr resume:false, and a fix response for the second stage:pr resume:true call. */
+class SelfReviewRunner {
+  ok = true;
+  calls: AgentRunArgs[] = [];
+  readonly #criticJson: string;
+  constructor(criticJson = SELF_REVIEW_CLEAN) {
+    this.#criticJson = criticJson;
+  }
+  async run(args: AgentRunArgs): Promise<AgentRunResult> {
+    this.calls.push(args);
+    if (args.stage === "pr" && !args.resume) {
+      // AC check — always fresh session.
+      const json = JSON.stringify([{ criterion: "It works.", pass: true, evidence: "Looks good." }]);
+      return { ok: true, sessionId: args.sessionId, finalText: json, usdCents: 5, numTurns: 1, exitCode: 0, timedOut: false };
+    }
+    if (args.stage === "pr" && args.resume) {
+      const prResumeCalls = this.calls.filter((c) => c.stage === "pr" && c.resume);
+      if (prResumeCalls.length === 1) {
+        // First resume call = critic.
+        return { ok: true, sessionId: args.sessionId, finalText: this.#criticJson, usdCents: 3, numTurns: 1, exitCode: 0, timedOut: false };
+      }
+      // Second resume call = fix.
+      return { ok: true, sessionId: args.sessionId, finalText: "fixed the issue", usdCents: 7, numTurns: 1, exitCode: 0, timedOut: false };
+    }
+    return { ok: true, sessionId: args.sessionId, finalText: `did ${args.stage}`, usdCents: 10, numTurns: 1, exitCode: 0, timedOut: false };
+  }
+}
+
+describe("orchestrator: self-review on pr:proposed (LP-46)", () => {
+  it("self-review critic runs with resume:true and the cheaper Haiku model", async () => {
+    const runner = new SelfReviewRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    const criticCall = runner.calls.find((c) => c.stage === "pr" && c.resume);
+    expect(criticCall).toBeDefined();
+    expect(criticCall!.resume).toBe(true);
+    expect(criticCall!.model).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("self-review consumes a review round from the budget", async () => {
+    const runner = new SelfReviewRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+    const roundsBefore = engStore.get(id)!.budget.reviewRoundsUsed;
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)!.budget.reviewRoundsUsed).toBeGreaterThan(roundsBefore);
+  });
+
+  it("PR body contains ## Self-review section", async () => {
+    const runner = new SelfReviewRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    const body = engStore.get(id)!.artifacts.pr?.body ?? "";
+    expect(body).toContain("## Self-review");
+  });
+
+  it("selfReview field is populated on the pr artifact", async () => {
+    const runner = new SelfReviewRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)!.artifacts.pr?.selfReview).not.toBeNull();
+  });
+
+  it("must-fix findings trigger one fix iteration using the task model", async () => {
+    const runner = new SelfReviewRunner(SELF_REVIEW_MUST_FIX);
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    engStore.setModel(taskId("10001"), "claude-opus-4-8", NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    const prResumeCalls = runner.calls.filter((c) => c.stage === "pr" && c.resume);
+    // critic call + fix call
+    expect(prResumeCalls).toHaveLength(2);
+    // fix call uses task model, not the cheap critic model
+    expect(prResumeCalls[1]!.model).toBe("claude-opus-4-8");
+  });
+
+  it("must-fix findings are marked resolved in the PR body when fix succeeds", async () => {
+    const runner = new SelfReviewRunner(SELF_REVIEW_MUST_FIX);
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    const selfReview = engStore.get(id)!.artifacts.pr?.selfReview ?? "";
+    expect(selfReview).toContain("✅");
+    expect(selfReview).toContain("Missing null check in handler");
+  });
+
+  it("no fix run when critic returns empty must-fix", async () => {
+    const runner = new SelfReviewRunner(SELF_REVIEW_CLEAN);
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    const prResumeCalls = runner.calls.filter((c) => c.stage === "pr" && c.resume);
+    expect(prResumeCalls).toHaveLength(1); // only the critic call, no fix call
+  });
+
+  it("advances to pr:proposed even when self-review critic returns malformed JSON", async () => {
+    const runner = new SelfReviewRunner("not valid json");
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    // Malformed JSON → no must-fix → summary is the clean path
+    const selfReview = engStore.get(id)!.artifacts.pr?.selfReview;
+    expect(selfReview).not.toBeNull();
+    expect(selfReview).toContain("No must-fix issues found.");
+  });
+
+  it("advances to pr:proposed even when self-review critic run fails entirely", async () => {
+    class FailingSelfReviewRunner extends SelfReviewRunner {
+      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+        if (args.stage === "pr" && args.resume) throw new Error("critic exploded");
+        return super.run(args);
+      }
+    }
+    const runner = new FailingSelfReviewRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    // selfReview is null when the critic throws entirely
+    expect(engStore.get(id)!.artifacts.pr?.selfReview).toBeNull();
   });
 });

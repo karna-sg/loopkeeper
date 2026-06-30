@@ -313,6 +313,12 @@ struct TaskWorkspaceView: View {
         }
         acCheckList(task)
         diffExpander(task)
+        if let selfReview = task.artifacts?.pr?.selfReview, !selfReview.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("self-review:").font(monoSmall).foregroundStyle(.secondary)
+                MarkdownText(source: selfReview, color: .secondary)
+            }
+        }
         actionButton("approve & open PR", .green) { await model.approvePR(task); await reload() }
         Text("This opens a public PR on GitHub.").font(monoSmall).foregroundStyle(.secondary)
     }

@@ -128,3 +128,39 @@ export function renderAddressCommentsPrompt(comments: readonly ReviewComment[]):
     list || "(no unresolved comments)",
   ].join("\n");
 }
+
+/** Coder-critic self-review prompt (LP-46). Agent must return ONLY a JSON object. */
+export function renderSelfReviewPrompt(task: EngTask, diff: DiffFile[]): string {
+  const plan = task.artifacts.plan?.editedText ?? task.artifacts.plan?.text ?? "(no stored plan)";
+  const ac = task.acceptanceCriteria ?? "(no acceptance criteria)";
+  return [
+    `You are reviewing your own implementation of ${task.jiraKey} before it goes to a human reviewer.`,
+    `Read the diff, the approved plan, and the acceptance criteria. Critique the implementation.`,
+    `Output ONLY a JSON object — no prose, no markdown fences.`,
+    `Format: {"mustFix":[{"description":"...","file":"..."}],"nits":["..."],"summary":"..."}`,
+    `mustFix: issues that would cause a review rejection (bugs, missing AC, wrong behavior). Empty array if none.`,
+    `nits: optional style/naming suggestions. Empty array if none.`,
+    `summary: one sentence overview of the implementation quality.`,
+    ``,
+    `Task: ${task.jiraKey} — ${task.title}`,
+    ``,
+    `Acceptance criteria:`,
+    ac,
+    ``,
+    `Approved plan:`,
+    plan,
+    ``,
+    `Code diff:`,
+    formatDiff(diff),
+  ].join("\n");
+}
+
+/** Fix prompt for self-review must-fix findings (LP-46). */
+export function renderSelfReviewFixPrompt(mustFix: ReadonlyArray<{ description: string; file?: string }>): string {
+  const list = mustFix.map((i) => `- ${i.file ? `${i.file}: ` : ""}${i.description}`).join("\n");
+  return [
+    `Address these self-review findings before the PR is opened. Fix the code, keep tests green, and briefly summarize what you changed.`,
+    ``,
+    list || "(no findings)",
+  ].join("\n");
+}

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { EngStore, TransitionArgs, TransitionOutcome } from "../store/eng-store.ts";
 import type { AcCheckItem, EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
-import { effectsFor, shouldRetryAfterTestFailure } from "./state-machine.ts";
+import { effectsFor, shouldRetryAfterTestFailure, shouldRetryReview } from "./state-machine.ts";
 import { redactSecrets } from "../redact.ts";
-import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanJudgePrompt, renderPlanPrompt } from "./prompts.ts";
+import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanJudgePrompt, renderPlanPrompt, renderSelfReviewFixPrompt, renderSelfReviewPrompt } from "./prompts.ts";
 import type { AgentRunner, DeployerPort, DiffFile, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
+
+const SELF_REVIEW_MODEL = "claude-haiku-4-5-20251001";
 
 export interface OrchestratorDeps {
   engStore: EngStore;
@@ -231,7 +233,8 @@ export class Orchestrator {
       if (result.passed) {
         this.#advance(taskId, { stage: "test", status: "passed" });
         await this.#runAcCheck(this.#require(taskId), ws.path);
-        engStore.setArtifact(taskId, { pr: this.#proposePr(this.#require(taskId), result, commit.files) }, now());
+        const selfReviewSummary = await this.#selfReview(this.#require(taskId), ws.path, sessionId);
+        engStore.setArtifact(taskId, { pr: this.#proposePr(this.#require(taskId), result, commit.files, selfReviewSummary) }, now());
         this.#advance(taskId, { stage: "pr", status: "proposed" });
         return;
       }
@@ -267,6 +270,7 @@ export class Orchestrator {
       proposedTs: proposed?.proposedTs ?? now(),
       createdTs: now(),
       approvedBy: proposed?.approvedBy ?? null,
+      selfReview: proposed?.selfReview ?? null,
     };
     engStore.setArtifact(taskId, { pr: artifact }, now());
     this.#advance(taskId, { stage: "pr", status: "created" });
@@ -560,9 +564,151 @@ export class Orchestrator {
     engStore.setArtifact(task.id, { acCheck: items }, now());
   }
 
+  /**
+   * LP-46: Coder-critic self-review — runs after tests pass, before pr:proposed.
+   * Critiques the diff on a cheap model (SELF_REVIEW_MODEL), optionally runs one fix iteration
+   * on must-fix findings (guarded by the review-round budget), then returns a markdown summary
+   * for inclusion in the PR body. Never throws — all errors caught so pr:proposed always advances.
+   */
+  async #selfReview(task: EngTask, worktreePath: string, sessionId: string): Promise<string | null> {
+    const { engStore, agentRunner, github, workspace, now } = this.#d;
+
+    let diff: DiffFile[] = [];
+    if (github) {
+      try {
+        diff = await github.getDiff(task.repo, { base: task.defaultBranch, head: task.branch ?? "HEAD" });
+      } catch {
+        // Network/GitHub error — proceed with empty diff.
+      }
+    }
+
+    let branchLog = "";
+    try {
+      branchLog = await workspace.branchLog(task);
+    } catch {
+      // ignore
+    }
+
+    engStore.addBudgetUsage(task.id, { reviewRounds: 1 }, now());
+
+    const criticRunId = engStore.startAgentRun({ taskId: task.id, stage: "pr", sessionId, iteration: 0, startedTs: now() });
+    let criticRun: Awaited<ReturnType<AgentRunner["run"]>>;
+    try {
+      criticRun = await agentRunner.run({
+        taskId: task.id,
+        stage: "pr",
+        sessionId,
+        worktreePath,
+        mode: "execute",
+        resume: true,
+        prompt: renderSelfReviewPrompt(task, diff),
+        coldStartPrompt: renderColdStartPrompt(task, branchLog),
+        model: SELF_REVIEW_MODEL,
+      });
+    } catch (err) {
+      engStore.finishAgentRun(criticRunId, { status: "failed", finishedTs: now(), error: String(err) });
+      return null;
+    }
+
+    engStore.finishAgentRun(criticRunId, {
+      status: criticRun.ok ? "succeeded" : "failed",
+      finishedTs: now(),
+      exitCode: criticRun.exitCode,
+      usdCents: criticRun.usdCents,
+      numTurns: criticRun.numTurns,
+      resultSummary: truncate(criticRun.finalText, 200),
+      sessionId: criticRun.sessionId,
+      ...(criticRun.error ? { error: criticRun.error } : {}),
+    });
+    const budget2 = engStore.addBudgetUsage(task.id, { usdCents: criticRun.usdCents }, now());
+    if (criticRun.sessionId !== sessionId) engStore.setClaudeSession(task.id, criticRun.sessionId, now());
+
+    let mustFix: Array<{ description: string; file?: string }> = [];
+    let nits: string[] = [];
+    let criticSummary = "";
+    if (criticRun.ok && criticRun.finalText) {
+      try {
+        const parsed = JSON.parse(criticRun.finalText.trim()) as { mustFix?: unknown; nits?: unknown; summary?: unknown };
+        if (Array.isArray(parsed.mustFix)) {
+          mustFix = (parsed.mustFix as unknown[])
+            .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+            .map((x) => ({
+              description: typeof x.description === "string" ? x.description : String(x.description ?? ""),
+              ...(typeof x.file === "string" ? { file: x.file } : {}),
+            }));
+        }
+        if (Array.isArray(parsed.nits)) {
+          nits = (parsed.nits as unknown[]).filter((x): x is string => typeof x === "string");
+        }
+        if (typeof parsed.summary === "string") criticSummary = parsed.summary;
+      } catch {
+        // Malformed JSON — treat as clean.
+      }
+    }
+
+    // One fix iteration if must-fix items exist and review budget allows.
+    let resolvedDescriptions: string[] = [];
+    if (mustFix.length > 0 && budget2 && shouldRetryReview(budget2)) {
+      const fixSessionId = criticRun.sessionId;
+      const fixRunId = engStore.startAgentRun({ taskId: task.id, stage: "pr", sessionId: fixSessionId, iteration: 1, startedTs: now() });
+      let fixRun: Awaited<ReturnType<AgentRunner["run"]>> | null = null;
+      try {
+        fixRun = await agentRunner.run({
+          taskId: task.id,
+          stage: "pr",
+          sessionId: fixSessionId,
+          worktreePath,
+          mode: "execute",
+          resume: true,
+          prompt: renderSelfReviewFixPrompt(mustFix),
+          coldStartPrompt: renderColdStartPrompt(task, branchLog),
+          model: task.claudeModel,
+        });
+      } catch (err) {
+        engStore.finishAgentRun(fixRunId, { status: "failed", finishedTs: now(), error: String(err) });
+      }
+      if (fixRun) {
+        engStore.finishAgentRun(fixRunId, {
+          status: fixRun.ok ? "succeeded" : "failed",
+          finishedTs: now(),
+          exitCode: fixRun.exitCode,
+          usdCents: fixRun.usdCents,
+          numTurns: fixRun.numTurns,
+          resultSummary: truncate(fixRun.finalText, 200),
+          sessionId: fixRun.sessionId,
+          ...(fixRun.error ? { error: fixRun.error } : {}),
+        });
+        engStore.addBudgetUsage(task.id, { usdCents: fixRun.usdCents }, now());
+        if (fixRun.sessionId !== fixSessionId) engStore.setClaudeSession(task.id, fixRun.sessionId, now());
+        if (fixRun.ok) {
+          try {
+            await workspace.commitAndPush(task, `${task.jiraKey}: self-review fixes`);
+            resolvedDescriptions = mustFix.map((i) => i.description);
+          } catch {
+            // Commit failed — proceed with unresolved items.
+          }
+        }
+      }
+    }
+
+    // Build markdown summary.
+    if (mustFix.length === 0) {
+      return criticSummary ? `${criticSummary}\n\nNo must-fix issues found.` : "No must-fix issues found.";
+    }
+    const lines: string[] = [];
+    if (criticSummary) lines.push(criticSummary, "");
+    lines.push(`**Must-fix** (${mustFix.length} found, ${resolvedDescriptions.length} resolved):`);
+    for (const item of mustFix) {
+      const resolved = resolvedDescriptions.includes(item.description);
+      lines.push(`- ${resolved ? "✅" : "⚠️"} ${item.description}${item.file ? ` (${item.file})` : ""}`);
+    }
+    if (nits.length > 0) lines.push("", `**Nits**: ${nits.join(", ")}`);
+    return lines.join("\n");
+  }
+
   /** Build a clean, GitHub-rendered PR body: real summary, changed-file list, a one-line test result,
    *  and the plan tucked in a collapsible section. No raw agent ramble or ANSI dumps. */
-  #proposePr(task: EngTask, test: TestOutcome, files: readonly string[]): PrArtifact {
+  #proposePr(task: EngTask, test: TestOutcome, files: readonly string[], selfReviewSummary: string | null = null): PrArtifact {
     const plan = task.artifacts.plan?.editedText ?? task.artifacts.plan?.text ?? "";
     const fileList = files.length > 0 ? files.map((f) => `- \`${f}\``).join("\n") : `_${files.length} files changed_`;
     const testLine = test.passed
@@ -575,6 +721,7 @@ export class Orchestrator {
       `\n\n## Tests\n${testLine}`,
       task.acceptanceCriteria ? `\n\n## Acceptance criteria\n${redactSecrets(task.acceptanceCriteria)}` : "",
       plan ? `\n\n<details>\n<summary>Implementation plan</summary>\n\n${redactSecrets(plan)}\n\n</details>` : "",
+      selfReviewSummary ? `\n\n## Self-review\n${selfReviewSummary}` : "",
       `\n\n---\n🤖 Generated by LoopKeeper`,
     ].join("");
     return {
@@ -586,6 +733,7 @@ export class Orchestrator {
       proposedTs: this.#d.now(),
       createdTs: null,
       approvedBy: null,
+      selfReview: selfReviewSummary,
     };
   }
 }
