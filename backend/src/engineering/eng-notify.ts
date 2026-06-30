@@ -8,8 +8,11 @@ function message(task: EngTask): { title: string; body: string } {
   const tag = task.jiraKey;
   if (task.status === "blocked") return { title: `Task needs attention · ${tag}`, body: task.lastError ?? task.title };
   switch (`${task.stage}:${task.status}`) {
-    case "plan:completed_unapproved":
-      return { title: `Plan ready · ${tag}`, body: task.title };
+    case "plan:completed_unapproved": {
+      const score = task.artifacts.plan?.qualityScore;
+      const scoreStr = score != null ? ` (${score.toFixed(2)})` : "";
+      return { title: `Plan ready${scoreStr} · ${tag}`, body: task.title };
+    }
     case "pr:proposed":
       return { title: `PR ready to open · ${tag}`, body: task.artifacts.pr?.title ?? task.title };
     case "review:comments_received":

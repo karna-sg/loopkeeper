@@ -98,6 +98,25 @@ export function renderAcCheckPrompt(task: EngTask, diff: DiffFile[]): string {
   ].join("\n");
 }
 
+/** Fresh-session prompt for the plan quality judge (LP-101). Agent must return ONLY a JSON object. */
+export function renderPlanJudgePrompt(planText: string, task: EngTask): string {
+  const ac = task.acceptanceCriteria ?? "(none)";
+  return [
+    `You are evaluating the quality of a software implementation plan.`,
+    `Score on three dimensions: coverage (does it address all requirements?), localization (are the correct files/components identified?), scope-fit (neither too broad nor too narrow).`,
+    `Output ONLY a JSON object — no prose, no markdown fences.`,
+    `Format: {"score":<0.0–1.0 float>,"reasons":"<one sentence>"}`,
+    ``,
+    `Task: ${task.jiraKey} — ${task.title}`,
+    ``,
+    `Acceptance criteria:`,
+    ac,
+    ``,
+    `Plan:`,
+    planText,
+  ].join("\n");
+}
+
 export function renderAddressCommentsPrompt(comments: readonly ReviewComment[]): string {
   const list = comments
     .filter((c) => !c.resolution)

@@ -125,7 +125,7 @@ describe("buildPlanComment", () => {
 
   it("includes the plan text when present (prefers editedText)", () => {
     const task = baseTask({
-      artifacts: { ...EMPTY_ARTIFACTS, plan: { text: "raw plan", editedText: "annotated plan", sessionId: null, revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null } },
+      artifacts: { ...EMPTY_ARTIFACTS, plan: { text: "raw plan", editedText: "annotated plan", sessionId: null, revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null, qualityScore: null } },
     });
     const body = buildPlanComment(task);
     expect(body).toContain("annotated plan");
@@ -134,7 +134,7 @@ describe("buildPlanComment", () => {
 
   it("falls back to plan.text when editedText is null", () => {
     const task = baseTask({
-      artifacts: { ...EMPTY_ARTIFACTS, plan: { text: "raw plan", editedText: null, sessionId: null, revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null } },
+      artifacts: { ...EMPTY_ARTIFACTS, plan: { text: "raw plan", editedText: null, sessionId: null, revision: 0, generatedTs: NOW, approvedTs: null, approvedBy: null, qualityScore: null } },
     });
     expect(buildPlanComment(task)).toContain("raw plan");
   });

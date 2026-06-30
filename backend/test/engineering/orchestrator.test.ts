@@ -712,3 +712,98 @@ describe("orchestrator: AC check on pr:proposed (LP-33)", () => {
     expect(engStore.get(id)!.artifacts.acCheck).toEqual([]);
   });
 });
+
+// ─── LP-101: inline plan quality judge ───────────────────────────────────────
+
+/** Runner whose second call (the judge) returns a valid JSON score. */
+class PlanJudgeRunner {
+  ok = true; // required to match FakeAgentRunner's structural type for harness()
+  calls: AgentRunArgs[] = [];
+  readonly #judgeScore: number;
+  readonly #judgeThrows: boolean;
+  readonly #judgeJson: string | null;
+  constructor(opts: { score?: number; throws?: boolean; json?: string } = {}) {
+    this.#judgeScore = opts.score ?? 0.85;
+    this.#judgeThrows = opts.throws ?? false;
+    this.#judgeJson = opts.json ?? null;
+  }
+  async run(args: AgentRunArgs): Promise<AgentRunResult> {
+    this.calls.push(args);
+    const planCalls = this.calls.filter((c) => c.stage === "plan");
+    // First plan call = actual plan generation; subsequent plan calls = judge.
+    if (planCalls.length >= 2) {
+      if (this.#judgeThrows) throw new Error("judge exploded");
+      const json = this.#judgeJson ?? JSON.stringify({ score: this.#judgeScore, reasons: "good coverage" });
+      return { ok: true, sessionId: args.sessionId, finalText: json, usdCents: 1, numTurns: 1, exitCode: 0, timedOut: false };
+    }
+    return { ok: true, sessionId: args.sessionId, finalText: `did ${args.stage}`, usdCents: 10, numTurns: 1, exitCode: 0, timedOut: false };
+  }
+}
+
+async function advanceToPlanCompleted(engStore: EngStore, worker: WorkerRunner, id: string): Promise<void> {
+  applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+  await drain(worker);
+}
+
+describe("orchestrator: plan quality judge (LP-101)", () => {
+  it("plan flow completes unchanged when judge throws", async () => {
+    const runner = new PlanJudgeRunner({ throws: true });
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPlanCompleted(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "plan", status: "completed_unapproved" });
+    expect(engStore.get(id)!.artifacts.plan?.qualityScore).toBeNull();
+  });
+
+  it("persists score on plan artifact when judge succeeds", async () => {
+    const runner = new PlanJudgeRunner({ score: 0.85 });
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPlanCompleted(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "plan", status: "completed_unapproved" });
+    expect(engStore.get(id)!.artifacts.plan?.qualityScore).toBe(0.85);
+  });
+
+  it("score is null and plan advances when judge returns malformed JSON", async () => {
+    const runner = new PlanJudgeRunner({ json: "not valid json" });
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPlanCompleted(engStore, worker, id);
+
+    expect(engStore.get(id)).toMatchObject({ stage: "plan", status: "completed_unapproved" });
+    expect(engStore.get(id)!.artifacts.plan?.qualityScore).toBeNull();
+  });
+
+  it("clamps out-of-range scores to [0,1]", async () => {
+    const runner = new PlanJudgeRunner({ json: JSON.stringify({ score: 1.5, reasons: "too high" }) });
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPlanCompleted(engStore, worker, id);
+
+    expect(engStore.get(id)!.artifacts.plan?.qualityScore).toBe(1);
+  });
+
+  it("judge uses a fresh session and Haiku model, never resumes", async () => {
+    const runner = new PlanJudgeRunner({ score: 0.9 });
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPlanCompleted(engStore, worker, id);
+
+    const judgeCall = runner.calls.filter((c) => c.stage === "plan")[1];
+    expect(judgeCall).toBeDefined();
+    expect(judgeCall!.resume).toBe(false);
+    expect(judgeCall!.model).toBe("claude-haiku-4-5-20251001");
+  });
+});
