@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var showLabels = false
     @State private var labelPickerTask: EngTask?
     @AppStorage("loopkeeper.queueLabelId") private var queueLabelId = ""
+    @State private var noDateExpanded = false
 
     var body: some View {
         @Bindable var model = model
@@ -343,11 +344,31 @@ struct ContentView: View {
     private func section(_ bucket: Theme.Bucket, _ loops: [OpenLoop]) -> some View {
         if !loops.isEmpty {
             Section {
-                if !isCollapsed(headerKey(bucket)) { ForEach(loops) { row($0) } }
+                if !isCollapsed(headerKey(bucket)) {
+                    ForEach(bucket == .noDate ? noDateVisible(loops, expanded: noDateExpanded) : loops) { row($0) }
+                    if bucket == .noDate && loops.count > 10 {
+                        noDateToggleRow(total: loops.count)
+                    }
+                }
             } header: {
                 sectionHeader(bucket, loops)
             }
         }
+    }
+
+    @ViewBuilder
+    private func noDateToggleRow(total: Int) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { noDateExpanded.toggle() }
+        } label: {
+            Text(noDateExpanded ? "Show less" : "Show all (\(total))")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowSeparator(.hidden)
     }
 
     @ViewBuilder
