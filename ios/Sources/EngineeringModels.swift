@@ -52,6 +52,7 @@ struct PRArtifact: Codable, Hashable {
     let diffSummary: String?
     let url: String?
     let number: Int?
+    let selfReview: String?
 }
 
 struct ReviewComment: Codable, Identifiable, Hashable {

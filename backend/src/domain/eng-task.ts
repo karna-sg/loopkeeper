@@ -157,6 +157,8 @@ export interface PrArtifact {
   proposedTs: string;
   createdTs: string | null;
   approvedBy: string | null;
+  /** Markdown summary of coder-critic findings + resolutions (LP-46). null if self-review was skipped or returned nothing. */
+  selfReview: string | null;
 }
 
 export interface ReviewComment {

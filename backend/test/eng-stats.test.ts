@@ -49,7 +49,7 @@ function withPr(t: EngTask, createdTs: string): EngTask {
     ...t,
     artifacts: {
       ...t.artifacts,
-      pr: { title: "PR", body: "", diffSummary: "", url: "https://github.com/pr/1", number: 1, proposedTs: createdTs, createdTs, approvedBy: null },
+      pr: { title: "PR", body: "", diffSummary: "", url: "https://github.com/pr/1", number: 1, proposedTs: createdTs, createdTs, approvedBy: null, selfReview: null },
     },
   };
 }

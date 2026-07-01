@@ -144,7 +144,7 @@ describe("buildPlanComment", () => {
       artifacts: {
         ...EMPTY_ARTIFACTS,
         dev: { summary: "done", branch: "LK-1-add-oauth", branchURL: "https://github.com/karna/loopkeeper/tree/LK-1-add-oauth", filesChanged: 3, iterations: 2, lastIterationTs: NOW },
-        pr: { title: "Add OAuth", body: "Adds 3LO.", diffSummary: "", url: "https://github.com/karna/loopkeeper/pull/42", number: 42, proposedTs: NOW, createdTs: NOW, approvedBy: null },
+        pr: { title: "Add OAuth", body: "Adds 3LO.", diffSummary: "", url: "https://github.com/karna/loopkeeper/pull/42", number: 42, proposedTs: NOW, createdTs: NOW, approvedBy: null, selfReview: null },
       },
     });
     const body = buildPlanComment(task);
