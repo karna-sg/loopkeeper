@@ -162,8 +162,8 @@ struct ContentView: View {
         return model.queueOrder.compactMap { byJiraId[$0] }
     }
 
-    private var hasActiveFilters: Bool {
-        filterStage != "all" || filterStatus != "any" || !filterTagsCSV.isEmpty
+    private var currentFilterState: TaskFilterState {
+        TaskFilterState(stage: filterStage, statusGroup: filterStatus, tags: filterTagsSet)
     }
 
     private func toggleTag(_ tag: String) {
@@ -199,7 +199,7 @@ struct ContentView: View {
                     }
                 }
             }
-            if hasActiveFilters {
+            if currentFilterState.isActive {
                 Divider()
                 Button("clear filters", role: .destructive) {
                     filterStage   = "all"
@@ -208,7 +208,7 @@ struct ContentView: View {
                 }
             }
         } label: {
-            Image(systemName: hasActiveFilters
+            Image(systemName: currentFilterState.isActive
                 ? "line.3.horizontal.decrease.circle.fill"
                 : "line.3.horizontal.decrease.circle")
                 .font(.system(size: 10))
@@ -304,7 +304,7 @@ struct ContentView: View {
                                     }
                             }
                             if filteredSortedTasks.isEmpty {
-                                Text(hasActiveFilters
+                                Text(currentFilterState.isActive
                                     ? "no tasks match — clear filters"
                                     : (model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira"))
                                     .font(.system(size: 11, design: .monospaced))
@@ -448,7 +448,9 @@ struct ContentView: View {
     /// this `[ sync ]` button is the one control that pulls newly-assigned tickets from Jira.
     @ViewBuilder
     private var tasksHeader: some View {
-        let badgeCount = filteredSortedTasks.filter(\.needsAction).count
+        let totalCount    = model.sortedTasks.count
+        let filteredCount = queueLabelId.isEmpty ? filteredSortedTasks.count : queueTasks.count
+        let badgeCount    = filteredSortedTasks.filter(\.needsAction).count
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Button {
@@ -459,7 +461,15 @@ struct ContentView: View {
                         Text("# tasks")
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Theme.headerAccent)
-                        if queueLabelId.isEmpty, badgeCount > 0 {
+                        if !queueLabelId.isEmpty {
+                            Text("\(filteredCount)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        } else if currentFilterState.isActive {
+                            Text("\(filteredCount) of \(totalCount)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        } else if badgeCount > 0 {
                             Text("\(badgeCount) need you")
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.orange)
@@ -468,12 +478,22 @@ struct ContentView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(tasksHeaderA11yLabel(filteredCount: filteredCount, totalCount: totalCount, badgeCount: badgeCount))
                 Spacer()
                 if queueLabelId.isEmpty {
-                    if filterStage != "all" {
-                        Text("[\(filterStage)]")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(Theme.headerAccent)
+                    if currentFilterState.isActive {
+                        Button {
+                            filterStage   = "all"
+                            filterStatus  = "any"
+                            filterTagsCSV = ""
+                        } label: {
+                            Text("× clear")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("clear filters")
+                        .accessibilityHint("Removes all active task filters")
                     }
                     taskFilterMenu
                 }
@@ -495,6 +515,20 @@ struct ContentView: View {
             }
         }
         .textCase(nil)
+    }
+
+    private func tasksHeaderA11yLabel(filteredCount: Int, totalCount: Int, badgeCount: Int) -> String {
+        if !queueLabelId.isEmpty {
+            return "tasks, \(filteredCount) task\(filteredCount == 1 ? "" : "s") in queue"
+        } else if currentFilterState.isActive {
+            let n = currentFilterState.activeCount
+            let filterWord = n == 1 ? "filter" : "filters"
+            return "tasks, \(n) \(filterWord) active, \(filteredCount) of \(totalCount) shown"
+        } else if badgeCount > 0 {
+            return "tasks, \(badgeCount) need your attention"
+        } else {
+            return "tasks"
+        }
     }
 
     /// Menu to pick (or clear) the active queue label.

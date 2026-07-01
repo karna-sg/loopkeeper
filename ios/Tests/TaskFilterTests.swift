@@ -188,10 +188,41 @@ final class TaskFilterTests: XCTestCase {
         XCTAssertTrue(TaskFilterState(stage: "dev").isActive)
     }
 
+    func testIsActiveWhenStatusGroupSet() {
+        XCTAssertTrue(TaskFilterState(statusGroup: "running").isActive)
+    }
+
+    func testIsActiveWhenTagsSet() {
+        XCTAssertTrue(TaskFilterState(tags: ["ios"]).isActive)
+    }
+
     func testActiveCount() {
         var f = TaskFilterState(stage: "dev", statusGroup: "running", tags: ["ios", "mobile-ux"])
         XCTAssertEqual(f.activeCount, 4)
         f.stage = "all"
         XCTAssertEqual(f.activeCount, 3)
+    }
+
+    // activeCount == 1 drives singular "1 filter active" in the VoiceOver label
+    func testActiveCountSingleFilter() {
+        XCTAssertEqual(TaskFilterState(stage: "dev").activeCount, 1)
+        XCTAssertEqual(TaskFilterState(statusGroup: "blocked").activeCount, 1)
+        XCTAssertEqual(TaskFilterState(tags: ["ios"]).activeCount, 1)
+    }
+
+    // Each tag counts individually toward activeCount
+    func testActiveCountMultipleTags() {
+        let f = TaskFilterState(tags: ["ios", "backend", "mobile-ux"])
+        XCTAssertEqual(f.activeCount, 3)
+    }
+
+    func testIsActiveReturnsFalseAfterReset() {
+        var f = TaskFilterState(stage: "dev", statusGroup: "running", tags: ["ios"])
+        XCTAssertTrue(f.isActive)
+        f.stage = "all"
+        f.statusGroup = "any"
+        f.tags = []
+        XCTAssertFalse(f.isActive)
+        XCTAssertEqual(f.activeCount, 0)
     }
 }
