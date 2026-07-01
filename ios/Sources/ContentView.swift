@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var selectedTask: EngTask?
     @State private var searchText = ""
     @State private var searchResults: [OpenLoop] = []
+    @State private var taskSearchInput = ""
+    @State private var taskSearchQuery = ""
     @State private var showStandup = false
     @State private var showShutdown = false
     @State private var showArchive = false
@@ -144,7 +146,8 @@ struct ContentView: View {
         applyTaskFilters(model.sortedTasks, filter: TaskFilterState(
             stage: filterStage,
             statusGroup: filterStatus,
-            tags: filterTagsSet
+            tags: filterTagsSet,
+            query: taskSearchQuery
         ))
     }
 
@@ -163,7 +166,7 @@ struct ContentView: View {
     }
 
     private var hasActiveFilters: Bool {
-        filterStage != "all" || filterStatus != "any" || !filterTagsCSV.isEmpty
+        filterStage != "all" || filterStatus != "any" || !filterTagsCSV.isEmpty || !taskSearchQuery.isEmpty
     }
 
     private func toggleTag(_ tag: String) {
@@ -202,9 +205,11 @@ struct ContentView: View {
             if hasActiveFilters {
                 Divider()
                 Button("clear filters", role: .destructive) {
-                    filterStage   = "all"
-                    filterStatus  = "any"
-                    filterTagsCSV = ""
+                    filterStage      = "all"
+                    filterStatus     = "any"
+                    filterTagsCSV    = ""
+                    taskSearchInput  = ""
+                    taskSearchQuery  = ""
                 }
             }
         } label: {
@@ -293,6 +298,21 @@ struct ContentView: View {
                                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             }
                         } else {
+                            TextField("search tasks", text: $taskSearchInput)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                .listRowSeparator(.hidden)
+                                .accessibilityLabel("Search tasks")
+                                .onChange(of: taskSearchInput) { _, q in
+                                    Task {
+                                        let trimmed = q.trimmingCharacters(in: .whitespaces)
+                                        try? await Task.sleep(nanoseconds: 300_000_000)
+                                        if taskSearchInput.trimmingCharacters(in: .whitespaces) == trimmed {
+                                            taskSearchQuery = trimmed
+                                        }
+                                    }
+                                }
                             ForEach(filteredSortedTasks) { task in
                                 JiraTaskRow(task: task, labels: model.labels)
                                     .listRowSeparator(.visible)
@@ -304,9 +324,11 @@ struct ContentView: View {
                                     }
                             }
                             if filteredSortedTasks.isEmpty {
-                                Text(hasActiveFilters
-                                    ? "no tasks match — clear filters"
-                                    : (model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira"))
+                                Text(!taskSearchQuery.isEmpty
+                                    ? "no tasks match '\(taskSearchQuery)'"
+                                    : (hasActiveFilters
+                                        ? "no tasks match — clear filters"
+                                        : (model.isSyncingTasks ? "syncing from jira…" : "no tasks assigned — tap sync to check jira")))
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.tertiary)
                                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))

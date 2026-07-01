@@ -6,17 +6,18 @@ struct TaskFilterState {
     var stage: String = "all"
     var statusGroup: String = "any"
     var tags: Set<String> = []
+    var query: String = ""
 
     var isActive: Bool {
-        stage != "all" || statusGroup != "any" || !tags.isEmpty
+        stage != "all" || statusGroup != "any" || !tags.isEmpty || !query.isEmpty
     }
 
     var activeCount: Int {
-        (stage != "all" ? 1 : 0) + (statusGroup != "any" ? 1 : 0) + tags.count
+        (stage != "all" ? 1 : 0) + (statusGroup != "any" ? 1 : 0) + tags.count + (!query.isEmpty ? 1 : 0)
     }
 }
 
-/// Pure filter: stage "all" / statusGroup "any" / empty tags → passes everything through.
+/// Pure filter: stage "all" / statusGroup "any" / empty tags / empty query → passes everything through.
 /// Dimensions combine with AND; within tags it's OR (task matches if it has ANY selected tag).
 func applyTaskFilters(_ tasks: [EngTask], filter: TaskFilterState) -> [EngTask] {
     guard filter.isActive else { return tasks }
@@ -31,9 +32,21 @@ func applyTaskFilters(_ tasks: [EngTask], filter: TaskFilterState) -> [EngTask] 
         default:          statusOK = true
         }
         guard statusOK else { return false }
-        guard !filter.tags.isEmpty else { return true }
-        let taskTags = Set((task.labels ?? []) + (task.components ?? []))
-        return !filter.tags.isDisjoint(with: taskTags)
+        if !filter.tags.isEmpty {
+            let taskTags = Set((task.labels ?? []) + (task.components ?? []))
+            guard !filter.tags.isDisjoint(with: taskTags) else { return false }
+        }
+        if !filter.query.isEmpty {
+            let q = filter.query.lowercased()
+            let matches = task.jiraKey.lowercased().contains(q)
+                || task.title.lowercased().contains(q)
+                || (task.labels ?? []).contains { $0.lowercased().contains(q) }
+                || (task.components ?? []).contains { $0.lowercased().contains(q) }
+                || (task.description ?? "").lowercased().contains(q)
+                || (task.acceptanceCriteria ?? "").lowercased().contains(q)
+            guard matches else { return false }
+        }
+        return true
     }
 }
 
