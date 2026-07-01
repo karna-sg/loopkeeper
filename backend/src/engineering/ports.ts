@@ -4,7 +4,7 @@
  * with fakes (mirrors the existing `FakePushSender` / `fake-source.ts` pattern). The real adapters
  * (Claude Code, git, GitHub REST, SSH deploy) implement these; tests substitute scripted fakes.
  */
-import type { EngTask, ReviewComment, Stage } from "../domain/eng-task.ts";
+import type { EngTask, PlanSpec, ReviewComment, Stage } from "../domain/eng-task.ts";
 
 export interface AgentRunResult {
   ok: boolean;
@@ -12,6 +12,8 @@ export interface AgentRunResult {
   sessionId: string;
   /** Final assistant text — the plan (plan stage) or change summary (execute stage). Redacted. */
   finalText: string;
+  /** Structured spec parsed from the plan JSON block; null when not a plan run or parsing failed. */
+  planSpec?: PlanSpec | null;
   usdCents: number;
   numTurns: number | null;
   exitCode: number | null;

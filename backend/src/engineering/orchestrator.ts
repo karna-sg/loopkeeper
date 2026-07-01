@@ -155,9 +155,25 @@ export class Orchestrator {
     engStore.addBudgetUsage(taskId, { usdCents: run.usdCents }, now());
     if (!run.ok) throw new Error(run.error ?? "plan run failed");
 
+    const spec = run.planSpec ?? null;
     engStore.setArtifact(
       taskId,
-      { plan: { text: redactSecrets(run.finalText), editedText: null, sessionId: run.sessionId, revision: task.artifacts.plan?.revision ?? 0, generatedTs: now(), approvedTs: null, approvedBy: null } },
+      {
+        plan: {
+          text: redactSecrets(run.finalText),
+          editedText: null,
+          sessionId: run.sessionId,
+          revision: task.artifacts.plan?.revision ?? 0,
+          generatedTs: now(),
+          approvedTs: null,
+          approvedBy: null,
+          summary: spec?.summary ?? null,
+          steps: spec?.steps ?? null,
+          changedFiles: spec?.changedFiles ?? null,
+          newTests: spec?.newTests ?? null,
+          riskFlags: spec?.riskFlags ?? null,
+        },
+      },
       now(),
     );
     this.#advance(taskId, { stage: "plan", status: "completed_unapproved" });

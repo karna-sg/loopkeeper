@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderAcCheckPrompt } from "../../src/engineering/prompts.ts";
+import { renderAcCheckPrompt, renderPlanPrompt } from "../../src/engineering/prompts.ts";
 import type { DiffFile } from "../../src/engineering/ports.ts";
 import type { EngTask } from "../../src/domain/eng-task.ts";
 
@@ -87,5 +87,45 @@ describe("renderAcCheckPrompt", () => {
     const prompt = renderAcCheckPrompt(baseTask, sampleDiff);
     expect(prompt).toContain("LK-1");
     expect(prompt).toContain("Add a thing");
+  });
+});
+
+describe("renderPlanPrompt", () => {
+  it("includes the repo name", () => {
+    const prompt = renderPlanPrompt(baseTask);
+    expect(prompt).toContain("karna/loopkeeper");
+  });
+
+  it("includes the task requirements", () => {
+    const prompt = renderPlanPrompt(baseTask);
+    expect(prompt).toContain("LK-1");
+    expect(prompt).toContain("Add a thing");
+    expect(prompt).toContain("Do the thing.");
+    expect(prompt).toContain("It works.");
+  });
+
+  it("instructs the agent not to modify files", () => {
+    const prompt = renderPlanPrompt(baseTask);
+    expect(prompt).toContain("Do NOT modify any files");
+  });
+
+  it("includes a ```json fence instruction with all five spec fields", () => {
+    const prompt = renderPlanPrompt(baseTask);
+    expect(prompt).toContain("```json");
+    expect(prompt).toContain('"summary"');
+    expect(prompt).toContain('"steps"');
+    expect(prompt).toContain('"changedFiles"');
+    expect(prompt).toContain('"newTests"');
+    expect(prompt).toContain('"riskFlags"');
+  });
+
+  it("instructs exactly one fenced JSON block", () => {
+    const prompt = renderPlanPrompt(baseTask);
+    expect(prompt).toContain("EXACTLY ONE fenced JSON block");
+  });
+
+  it("instructs to keep JSON valid (machine-parsed)", () => {
+    const prompt = renderPlanPrompt(baseTask);
+    expect(prompt).toContain("machine-parsed");
   });
 });

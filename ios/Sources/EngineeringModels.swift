@@ -23,6 +23,12 @@ struct PlanArtifact: Codable, Hashable {
     let sessionId: String?
     let revision: Int?
     let approvedBy: String?
+    // LP-96: structured spec from the plan JSON block; nil on older backends or when parsing failed
+    let summary: String?
+    let steps: [String]?
+    let changedFiles: [String]?
+    let newTests: [String]?
+    let riskFlags: [String]?
 }
 
 struct DevArtifact: Codable, Hashable {

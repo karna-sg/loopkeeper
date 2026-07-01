@@ -104,6 +104,16 @@ export type JobState = (typeof JOB_STATES)[number];
 
 // --- Per-stage artifacts (FR-8). camelCase field names are the frozen client contract. ---
 
+/** Structured spec extracted from the plan JSON block (LP-96 / §1). All fields nullable so
+ *  older stored plans (pre-LP-96) that lack the JSON block decode safely. */
+export interface PlanSpec {
+  summary: string | null;
+  steps: string[] | null;
+  changedFiles: string[] | null;
+  newTests: string[] | null;
+  riskFlags: string[] | null;
+}
+
 export interface PlanArtifact {
   /** Full generated plan markdown (FR-12, readable/approvable). */
   text: string;
@@ -116,6 +126,12 @@ export interface PlanArtifact {
   generatedTs: string;
   approvedTs: string | null;
   approvedBy: string | null;
+  // LP-96: structured spec from the plan JSON block; null when Claude omitted it or parsing failed
+  summary: string | null;
+  steps: string[] | null;
+  changedFiles: string[] | null;
+  newTests: string[] | null;
+  riskFlags: string[] | null;
 }
 
 export interface DevArtifact {

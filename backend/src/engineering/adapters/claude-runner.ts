@@ -2,8 +2,34 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentRunArgs, AgentRunResult, AgentRunner } from "../ports.ts";
+import type { PlanSpec } from "../../domain/eng-task.ts";
 import { redactSecrets } from "../../redact.ts";
 import { runProcess } from "./spawn.ts";
+
+/** Tolerantly extract the structured plan spec from a plan text string.
+ *  Uses lastIndexOf so inline prose examples with ```json fences don't shadow the spec block. */
+export function parsePlanSpec(text: string): PlanSpec | null {
+  const fenceStart = text.lastIndexOf("```json");
+  if (fenceStart === -1) return null;
+  const contentStart = fenceStart + 7;
+  const fenceEnd = text.indexOf("```", contentStart);
+  if (fenceEnd === -1) return null;
+  const jsonStr = text.slice(contentStart, fenceEnd).trim();
+  try {
+    const raw = JSON.parse(jsonStr) as Record<string, unknown>;
+    const toStrArr = (v: unknown): string[] | null =>
+      Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : null;
+    return {
+      summary: typeof raw.summary === "string" ? raw.summary : null,
+      steps: toStrArr(raw.steps),
+      changedFiles: toStrArr(raw.changedFiles),
+      newTests: toStrArr(raw.newTests),
+      riskFlags: toStrArr(raw.riskFlags),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export interface ClaudeRunnerConfig {
   claudeBin: string;
@@ -93,10 +119,12 @@ export class ClaudeAgentRunner implements AgentRunner {
     // Plan mode → ExitPlanMode.plan; execute → result text; fall back to the last assistant message.
     const finalText = parsed.finalText || parsed.planText || parsed.lastAssistantText;
     const ok = proc.code === 0 && !proc.timedOut && !parsed.isError && parsed.sawResult;
+    const planSpec = args.mode === "plan" ? parsePlanSpec(parsed.planText) : null;
     return {
       ok,
       sessionId: parsed.sessionId,
       finalText: redactSecrets(finalText),
+      planSpec,
       usdCents: parsed.usdCents,
       numTurns: parsed.numTurns,
       exitCode: proc.code,

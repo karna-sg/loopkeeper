@@ -278,18 +278,36 @@ struct TaskWorkspaceView: View {
         (b.usdCentsUsed ?? 0) >= (b.maxUsdCents ?? Int.max) || (b.iterationsUsed ?? 0) >= (b.maxIterations ?? Int.max)
     }
 
+    private func hasStructuredPlan(_ task: EngTask) -> Bool {
+        let plan = task.artifacts?.plan
+        return !(plan?.steps ?? []).isEmpty || !(plan?.changedFiles ?? []).isEmpty
+    }
+
     @ViewBuilder private func planGate(_ task: EngTask) -> some View {
         if editingPlan {
+            // Escape hatch: free-form TextEditor for revision notes
             TextEditor(text: $planText)
                 .font(mono)
                 .frame(minHeight: 240)
                 .scrollContentBackground(.hidden)
                 .padding(8)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+        } else if hasStructuredPlan(task) {
+            planChecklist(task)
         } else {
-            MarkdownText(source: planText.isEmpty ? (task.artifacts?.plan?.text ?? "—") : planText)
+            // Fallback: no structured data — show prose markdown (pre-LP-96 behavior)
+            MarkdownText(source: task.artifacts?.plan?.text ?? "—")
         }
         textButton(editingPlan ? "[ done editing ]" : "[ edit / annotate ]", .secondary) { editingPlan.toggle() }
+        // riskFlags: shown prominently between the edit toggle and approve button
+        if let flags = task.artifacts?.plan?.riskFlags, !flags.isEmpty, !editingPlan {
+            planRiskFlags(flags)
+        }
+        // Show accumulated revision notes when checklist mode is active
+        if !planText.isEmpty && !editingPlan {
+            Text("note: \(planText)")
+                .font(monoSmall).foregroundStyle(.secondary).textSelection(.enabled)
+        }
         actionButton("approve plan — start dev", .green) {
             await model.approvePlan(task, editedText: planText.isEmpty ? nil : planText); await reload()
         }
@@ -298,6 +316,76 @@ struct TaskWorkspaceView: View {
         }
         Text("Approving resumes the same Claude Code session to implement the plan. Nothing merges or deploys without further approval.")
             .font(monoSmall).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func planChecklist(_ task: EngTask) -> some View {
+        let plan = task.artifacts?.plan
+        VStack(alignment: .leading, spacing: 12) {
+            if let summary = plan?.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+            if let files = plan?.changedFiles, !files.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("files:").font(monoSmall).foregroundStyle(.secondary)
+                    ForEach(files, id: \.self) { file in
+                        Button { planText += "• File: \(file)\n" } label: {
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("☐").font(monoSmall).foregroundStyle(.tertiary).frame(width: 14, alignment: .leading)
+                                Text(file).font(monoSmall).foregroundStyle(.primary).textSelection(.enabled)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            if let steps = plan?.steps, !steps.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("steps:").font(monoSmall).foregroundStyle(.secondary)
+                    ForEach(Array(steps.enumerated()), id: \.offset) { idx, step in
+                        Button { planText += "• Step \(idx + 1): \(step)\n" } label: {
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("\(idx + 1).").font(monoSmall).foregroundStyle(.tertiary).frame(width: 18, alignment: .trailing)
+                                Text(step).font(monoSmall).foregroundStyle(.primary).textSelection(.enabled)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            if let tests = plan?.newTests, !tests.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("new tests:").font(monoSmall).foregroundStyle(.secondary)
+                    ForEach(tests, id: \.self) { t in
+                        Text("  + \(t)").font(monoSmall).foregroundStyle(.tertiary).textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func planRiskFlags(_ flags: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("⚠ risks:").font(monoSmall).foregroundStyle(.orange)
+            ForEach(flags, id: \.self) { flag in
+                Button { planText += "• Flag: \(flag)\n" } label: {
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("⚠").font(monoSmall).foregroundStyle(.orange).frame(width: 16, alignment: .leading)
+                        Text(flag).font(monoSmall).foregroundStyle(.orange).textSelection(.enabled)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     @ViewBuilder private func prGate(_ task: EngTask) -> some View {
@@ -554,7 +642,13 @@ struct TaskWorkspaceView: View {
         if let detail = await model.taskDetail(taskID) {
             task = detail.task
             events = detail.events
-            if planText.isEmpty { planText = detail.task.artifacts?.plan?.editedText ?? detail.task.artifacts?.plan?.text ?? "" }
+            // When structured plan fields are present, planText is a revision-note accumulator
+            // (not a copy of prose), so don't pre-fill from plan.text.
+            if planText.isEmpty {
+                let plan = detail.task.artifacts?.plan
+                let hasStructured = !(plan?.steps ?? []).isEmpty || !(plan?.changedFiles ?? []).isEmpty
+                planText = plan?.editedText ?? (hasStructured ? "" : plan?.text ?? "")
+            }
         }
         loading = false
         startStreamIfNeeded()

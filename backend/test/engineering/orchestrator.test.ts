@@ -3,7 +3,7 @@ import { EngStore } from "../../src/store/eng-store.ts";
 import { Orchestrator, applyTransition } from "../../src/engineering/orchestrator.ts";
 import { WorkerRunner } from "../../src/engineering/worker.ts";
 import { branchNameFor, taskId } from "../../src/domain/eng-task.ts";
-import type { EngTask, EngTaskInput } from "../../src/domain/eng-task.ts";
+import type { EngTask, EngTaskInput, PlanSpec } from "../../src/domain/eng-task.ts";
 import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, DeployRun, DiffFile, GithubPort, PrState, PullRequest, TestOutcome, WorktreeInfo } from "../../src/engineering/ports.ts";
 
 const NOW = "2026-06-27T00:00:00Z";
@@ -710,5 +710,77 @@ describe("orchestrator: AC check on pr:proposed (LP-33)", () => {
     expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
     // FakeAgentRunner returns non-JSON "did pr", so parse fails gracefully → []
     expect(engStore.get(id)!.artifacts.acCheck).toEqual([]);
+  });
+});
+
+// ─── LP-96: structured planSpec propagation ──────────────────────────────────
+
+describe("orchestrator: planSpec structured fields on plan artifact (LP-96)", () => {
+  class PlanSpecRunner {
+    calls: AgentRunArgs[] = [];
+    constructor(public planSpec: PlanSpec | null = null) {}
+    async run(args: AgentRunArgs): Promise<AgentRunResult> {
+      this.calls.push(args);
+      return { ok: true, sessionId: args.sessionId, finalText: `did ${args.stage}`, planSpec: args.stage === "plan" ? this.planSpec : null, usdCents: 10, numTurns: 1, exitCode: 0, timedOut: false };
+    }
+  }
+
+  it("persists planSpec fields on the plan artifact when the runner returns them", async () => {
+    const spec: PlanSpec = {
+      summary: "Add feature X",
+      steps: ["Step 1", "Step 2"],
+      changedFiles: ["src/foo.ts"],
+      newTests: ["test/foo.test.ts"],
+      riskFlags: ["Touches auth"],
+    };
+    const runner = new PlanSpecRunner(spec);
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+
+    const plan = engStore.get(id)!.artifacts.plan!;
+    expect(plan.summary).toBe("Add feature X");
+    expect(plan.steps).toEqual(["Step 1", "Step 2"]);
+    expect(plan.changedFiles).toEqual(["src/foo.ts"]);
+    expect(plan.newTests).toEqual(["test/foo.test.ts"]);
+    expect(plan.riskFlags).toEqual(["Touches auth"]);
+  });
+
+  it("stores null for all structured fields when runner returns no planSpec", async () => {
+    const runner = new PlanSpecRunner(null);
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+
+    const plan = engStore.get(id)!.artifacts.plan!;
+    expect(plan.summary).toBeNull();
+    expect(plan.steps).toBeNull();
+    expect(plan.changedFiles).toBeNull();
+    expect(plan.newTests).toBeNull();
+    expect(plan.riskFlags).toBeNull();
+  });
+
+  it("structured fields survive the plan/approve spread (no route change needed)", async () => {
+    const spec: PlanSpec = { summary: "S", steps: ["s1"], changedFiles: ["f.ts"], newTests: null, riskFlags: ["risk1"] };
+    const runner = new PlanSpecRunner(spec);
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+
+    // Approve via the store directly (mirrors what the route does)
+    engStore.setArtifact(id, { plan: { ...engStore.get(id)!.artifacts.plan!, approvedTs: NOW, approvedBy: "acct-1" } }, NOW);
+    const plan = engStore.get(id)!.artifacts.plan!;
+    expect(plan.steps).toEqual(["s1"]);
+    expect(plan.riskFlags).toEqual(["risk1"]);
+    expect(plan.approvedTs).toBe(NOW);
   });
 });

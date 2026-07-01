@@ -16,6 +16,18 @@ export function renderPlanPrompt(task: EngTask): string {
     requirements(task),
     ``,
     `Write a step-by-step plan: which files to change, the approach, edge cases, and how to test it.`,
+    ``,
+    `After the prose, include EXACTLY ONE fenced JSON block (fence label must be \`\`\`json):`,
+    "```json",
+    `{`,
+    `  "summary": "<one-sentence executive summary>",`,
+    `  "steps": ["<step 1>", "<step 2>"],`,
+    `  "changedFiles": ["path/to/file.ts"],`,
+    `  "newTests": ["path/to/test.test.ts"],`,
+    `  "riskFlags": ["<risk or concern>"]`,
+    `}`,
+    "```",
+    `Omit a field (or use null) if not applicable. The JSON is machine-parsed — keep it valid.`,
   ].join("\n");
 }
 
