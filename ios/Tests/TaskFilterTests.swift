@@ -7,20 +7,26 @@ final class TaskFilterTests: XCTestCase {
 
     private func makeTask(
         id: String = UUID().uuidString,
+        jiraKey: String? = nil,
+        title: String? = nil,
         stage: String = "dev",
         status: String = "in_progress",
         labels: [String]? = nil,
-        components: [String]? = nil
+        components: [String]? = nil,
+        description: String? = nil,
+        acceptanceCriteria: String? = nil
     ) -> EngTask {
         EngTask(
             id: id,
-            jiraKey: "LP-\(id)",
+            jiraKey: jiraKey ?? "LP-\(id)",
             jiraUrl: nil,
-            title: "Task \(id)",
-            description: nil,
-            acceptanceCriteria: nil,
+            title: title ?? "Task \(id)",
+            description: description,
+            acceptanceCriteria: acceptanceCriteria,
+            jiraId: nil,
             labels: labels,
             components: components,
+            labelIds: nil,
             jiraStatus: nil,
             repo: nil,
             branch: nil,
@@ -178,6 +184,86 @@ final class TaskFilterTests: XCTestCase {
         XCTAssertTrue(availableTaskTags([]).isEmpty)
     }
 
+    // MARK: query filter
+
+    func testQueryMatchesJiraKey() {
+        let t1 = makeTask(jiraKey: "LP-101", title: "Authentication flow")
+        let t2 = makeTask(jiraKey: "LP-202", title: "Something else")
+        let result = applyTaskFilters([t1, t2], filter: TaskFilterState(query: "LP-101"))
+        XCTAssertEqual(result, [t1])
+    }
+
+    func testQueryMatchesTitle() {
+        let t1 = makeTask(title: "Fix login bug")
+        let t2 = makeTask(title: "Update dashboard")
+        let result = applyTaskFilters([t1, t2], filter: TaskFilterState(query: "login"))
+        XCTAssertEqual(result, [t1])
+    }
+
+    func testQueryMatchesLabel() {
+        let t1 = makeTask(labels: ["mobile-ux"])
+        let t2 = makeTask(labels: ["backend"])
+        let result = applyTaskFilters([t1, t2], filter: TaskFilterState(query: "mobile"))
+        XCTAssertEqual(result, [t1])
+    }
+
+    func testQueryMatchesComponent() {
+        let t1 = makeTask(components: ["ios/Sources/ContentView.swift"])
+        let t2 = makeTask(components: ["server/routes.py"])
+        let result = applyTaskFilters([t1, t2], filter: TaskFilterState(query: "contentview"))
+        XCTAssertEqual(result, [t1])
+    }
+
+    func testQueryMatchesDescription() {
+        let t1 = makeTask(description: "Users must be able to reset their password via email")
+        let t2 = makeTask(description: "Render a chart using Chart.js")
+        let result = applyTaskFilters([t1, t2], filter: TaskFilterState(query: "password"))
+        XCTAssertEqual(result, [t1])
+    }
+
+    func testQueryMatchesAcceptanceCriteria() {
+        let t1 = makeTask(acceptanceCriteria: "Given a valid token, the user sees the dashboard")
+        let t2 = makeTask(acceptanceCriteria: "Chart renders within 200ms")
+        let result = applyTaskFilters([t1, t2], filter: TaskFilterState(query: "dashboard"))
+        XCTAssertEqual(result, [t1])
+    }
+
+    func testQueryIsCaseInsensitive() {
+        let t = makeTask(jiraKey: "LP-55", title: "Onboarding flow")
+        let result = applyTaskFilters([t], filter: TaskFilterState(query: "ONBOARDING"))
+        XCTAssertEqual(result, [t])
+    }
+
+    func testQueryEmptyPassesAll() {
+        let tasks = [makeTask(), makeTask(), makeTask()]
+        let result = applyTaskFilters(tasks, filter: TaskFilterState(query: ""))
+        XCTAssertEqual(result.count, 3)
+    }
+
+    func testQueryNoMatchReturnsEmpty() {
+        let tasks = [makeTask(jiraKey: "LP-1", title: "Alpha"), makeTask(jiraKey: "LP-2", title: "Beta")]
+        let result = applyTaskFilters(tasks, filter: TaskFilterState(query: "LP-999"))
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    func testQueryCombinesWithStageFilter() {
+        let devMatch = makeTask(jiraKey: "LP-10", stage: "dev")
+        let prMatch  = makeTask(jiraKey: "LP-10", stage: "pr")
+        let devOther = makeTask(jiraKey: "LP-20", stage: "dev")
+        let filter = TaskFilterState(stage: "dev", query: "LP-10")
+        let result = applyTaskFilters([devMatch, prMatch, devOther], filter: filter)
+        XCTAssertEqual(result, [devMatch])
+    }
+
+    func testQueryCombinesWithTagFilter() {
+        let taggedMatch   = makeTask(title: "Auth service", labels: ["ios"])
+        let taggedNoMatch = makeTask(title: "Dashboard",    labels: ["ios"])
+        let untaggedMatch = makeTask(title: "Auth service", labels: ["backend"])
+        let filter = TaskFilterState(tags: ["ios"], query: "auth")
+        let result = applyTaskFilters([taggedMatch, taggedNoMatch, untaggedMatch], filter: filter)
+        XCTAssertEqual(result, [taggedMatch])
+    }
+
     // MARK: TaskFilterState helpers
 
     func testIsActiveDefault() {
@@ -188,10 +274,19 @@ final class TaskFilterTests: XCTestCase {
         XCTAssertTrue(TaskFilterState(stage: "dev").isActive)
     }
 
+    func testIsActiveWhenQuerySet() {
+        XCTAssertTrue(TaskFilterState(query: "LP-1").isActive)
+    }
+
     func testActiveCount() {
         var f = TaskFilterState(stage: "dev", statusGroup: "running", tags: ["ios", "mobile-ux"])
         XCTAssertEqual(f.activeCount, 4)
         f.stage = "all"
         XCTAssertEqual(f.activeCount, 3)
+    }
+
+    func testActiveCountIncludesQuery() {
+        let f = TaskFilterState(stage: "dev", query: "LP-1")
+        XCTAssertEqual(f.activeCount, 2)
     }
 }
