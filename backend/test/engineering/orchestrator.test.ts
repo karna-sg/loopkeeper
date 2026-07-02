@@ -653,6 +653,20 @@ function setupPreReviewTask(engStore: EngStore): string {
   const id = taskId("10001");
   engStore.setClaudeSession(id, "author-session-id", NOW);
   engStore.setBranchAndWorktree(id, "LK-1-add-a-thing", "/wt/LK-1", NOW);
+  // Advance to pr:proposed via direct store transitions (no effects fired) so that
+  // the pre_review tests can assert the handler never crosses any gate.
+  for (const [stage, status, actor, gate] of [
+    ["plan", "in_progress", "user", false],
+    ["plan", "completed_unapproved", "system", false],
+    ["plan", "approved", "user", true],
+    ["dev", "in_progress", "system", false],
+    ["dev", "done", "system", false],
+    ["test", "in_progress", "system", false],
+    ["test", "passed", "system", false],
+    ["pr", "proposed", "system", false],
+  ] as const) {
+    engStore.transition({ taskId: id, to: { stage, status }, actor, ...(gate ? { gateApproved: true } : {}), ts: NOW });
+  }
   return id;
 }
 
