@@ -1,5 +1,5 @@
 /** Prompt builders for the Claude Code stages. Kept pure + small so they're easy to tune/test. */
-import type { EngTask, ReviewComment } from "../domain/eng-task.ts";
+import type { EngTask, PreReviewFinding, ReviewComment } from "../domain/eng-task.ts";
 import type { DiffFile } from "./ports.ts";
 
 function requirements(task: EngTask): string {
@@ -95,6 +95,45 @@ export function renderAcCheckPrompt(task: EngTask, diff: DiffFile[]): string {
     ``,
     `Code diff:`,
     formatDiff(diff),
+  ].join("\n");
+}
+
+/** Fresh-session prompt for the adversarial reviewer run (LP-39). Agent must return ONLY a JSON object. */
+export function renderPreReviewPrompt(task: EngTask, diff: DiffFile[]): string {
+  return [
+    `You are an independent adversarial code reviewer — NOT the author of this change.`,
+    `Your job is to red-team the diff and find real issues before it merges.`,
+    `Output ONLY a JSON object — no prose, no markdown fences.`,
+    `Format: { "findings": [{ "severity": "critical|high|medium|low|info", "area": "<topic>", "note": "<concern>" }], "verdict": "<lgtm|concerns_noted|changes_requested>" }`,
+    `Severity guide: critical = security hole or data loss; high = likely bug or missing test; medium = edge case or design smell; low/info = style or nit.`,
+    `Focus areas: security vulnerabilities, missing test coverage, edge cases, regressions.`,
+    `Be a skeptic — find real issues. Return an empty findings array if the change is genuinely clean.`,
+    ``,
+    `Task: ${task.jiraKey} — ${task.title}`,
+    ``,
+    requirements(task),
+    ``,
+    `Code diff:`,
+    formatDiff(diff),
+  ].join("\n");
+}
+
+/** Resumed-author prompt for the rebuttal run (LP-39). Agent must return ONLY a JSON array. */
+export function renderRebuttalPrompt(task: EngTask, findings: readonly PreReviewFinding[]): string {
+  const findingsJson = JSON.stringify(
+    findings.map((f) => ({ severity: f.severity, area: f.area, note: f.note })),
+    null,
+    2,
+  );
+  return [
+    `You are the author of ${task.jiraKey}. A reviewer has raised the following concerns about your change.`,
+    `Respond to each concern concisely. Acknowledge valid issues; push back on false positives with evidence.`,
+    `Output ONLY a JSON array — no prose, no markdown fences.`,
+    `Each element must mirror the input item and add a "response" field:`,
+    `[{ "severity": "...", "area": "...", "note": "...", "response": "<your rebuttal>" }]`,
+    ``,
+    `Reviewer findings:`,
+    findingsJson,
   ].join("\n");
 }
 

@@ -87,7 +87,7 @@ export const ACTORS = ["user", "agent", "system", "jira_sync"] as const;
 export type Actor = (typeof ACTORS)[number];
 
 /** Worker job kinds (the orchestration queue). */
-export const JOB_KINDS = ["plan", "dev_test", "create_pr", "address_comments", "merge", "deploy", "verify", "rollback"] as const;
+export const JOB_KINDS = ["plan", "dev_test", "create_pr", "address_comments", "merge", "deploy", "verify", "rollback", "pre_review"] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 /** Job lifecycle in `eng_jobs`. */
@@ -239,6 +239,24 @@ export interface AcCheckItem {
   evidence: string;
 }
 
+/** One finding from the adversarial pre-review agent run (LP-39). */
+export interface PreReviewFinding {
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  /** Focus area, e.g. "security", "tests", "edge-cases". */
+  area: string;
+  /** Reviewer's concern (redacted). */
+  note: string;
+  /** Author's rebuttal (redacted). */
+  response: string;
+}
+
+/** Artifact from the two-agent pre-review run (reviewer + author rebuttal). */
+export interface PreReviewArtifact {
+  findings: PreReviewFinding[];
+  /** Derived from finding severities: "lgtm" | "concerns_noted" | "changes_requested". */
+  verdict: string;
+}
+
 export interface TaskArtifacts {
   plan: PlanArtifact | null;
   dev: DevArtifact | null;
@@ -250,6 +268,7 @@ export interface TaskArtifacts {
   verify: VerifyArtifact | null;
   rollback: RollbackArtifact | null;
   acCheck: AcCheckItem[] | null;
+  preReview: PreReviewArtifact | null;
 }
 
 export const EMPTY_ARTIFACTS: TaskArtifacts = {
@@ -263,6 +282,7 @@ export const EMPTY_ARTIFACTS: TaskArtifacts = {
   verify: null,
   rollback: null,
   acCheck: null,
+  preReview: null,
 };
 
 /** Per-task cost + iteration caps (PRD §8/§9). All counters accumulate; the worker escalates at a cap. */

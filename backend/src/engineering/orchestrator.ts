@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { EngStore, TransitionArgs, TransitionOutcome } from "../store/eng-store.ts";
-import type { AcCheckItem, EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
+import type { AcCheckItem, EngJob, EngTask, PreReviewArtifact, PreReviewFinding, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
 import { effectsFor, shouldRetryAfterTestFailure } from "./state-machine.ts";
 import { redactSecrets } from "../redact.ts";
-import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt } from "./prompts.ts";
+import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanPrompt, renderPreReviewPrompt, renderRebuttalPrompt } from "./prompts.ts";
 import type { AgentRunner, DeployerPort, DiffFile, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
 
 export interface OrchestratorDeps {
@@ -19,6 +19,8 @@ export interface OrchestratorDeps {
   deployEnv: string;
   /** Prod URL the post-deploy verify stage smoke-checks (e.g. https://host/healthz). Null → skip the auto check. */
   verifyUrl: string | null;
+  /** Max spend (USD cents) for the two pre-review agent runs (LP-39). */
+  maxPreReviewUsdCents: number;
   now: () => string;
   /** Shared map; the orchestrator registers kill callbacks here so the worker cancel-watcher can signal them. */
   cancelRegistry?: Map<string, () => void>;
@@ -75,6 +77,8 @@ export class Orchestrator {
         return this.#handleVerify(job.taskId);
       case "rollback":
         return this.#handleRollback(job.taskId);
+      case "pre_review":
+        return this.#handlePreReview(job.taskId);
     }
   }
 
@@ -499,6 +503,173 @@ export class Orchestrator {
     }
 
     engStore.setArtifact(task.id, { acCheck: items }, now());
+  }
+
+  /**
+   * LP-39: Two-agent adversarial pre-review. A fresh session red-teams the diff; the author session
+   * rebuts findings. Stores a `preReview` artifact without crossing any gate.
+   * Never throws — all errors are caught so pr:proposed always remains reachable.
+   */
+  async #handlePreReview(taskId: string): Promise<void> {
+    const { engStore, agentRunner, workspace, github, now, maxPreReviewUsdCents } = this.#d;
+    try {
+      let task = this.#require(taskId);
+      const ws = await workspace.ensure(task);
+
+      let diff: DiffFile[] = [];
+      if (github) {
+        try {
+          diff = await github.getDiff(task.repo, { base: task.defaultBranch, head: task.branch ?? "HEAD" });
+        } catch {
+          // Network/GitHub error — proceed with empty diff.
+        }
+      }
+
+      const subCap = Math.min(maxPreReviewUsdCents, task.budget.maxUsdCents - task.budget.usdCentsUsed);
+      if (subCap <= 0) {
+        engStore.setArtifact(taskId, { preReview: { findings: [], verdict: "lgtm" } }, now());
+        return;
+      }
+
+      // Run 1: fresh adversarial reviewer — must NOT reuse the author's session.
+      const reviewerSessionId = randomUUID();
+      const reviewRunId = engStore.startAgentRun({ taskId, stage: "pr", sessionId: reviewerSessionId, iteration: 0, startedTs: now() });
+      let reviewRun: Awaited<ReturnType<AgentRunner["run"]>>;
+      try {
+        reviewRun = await agentRunner.run({
+          taskId,
+          stage: "pr",
+          sessionId: reviewerSessionId,
+          worktreePath: ws.path,
+          mode: "execute",
+          resume: false,
+          prompt: renderPreReviewPrompt(task, diff),
+          model: task.claudeModel,
+        });
+      } catch (err) {
+        engStore.finishAgentRun(reviewRunId, { status: "failed", finishedTs: now(), error: String(err) });
+        engStore.setArtifact(taskId, { preReview: { findings: [], verdict: "lgtm" } }, now());
+        return;
+      }
+      engStore.finishAgentRun(reviewRunId, {
+        status: reviewRun.ok ? "succeeded" : "failed",
+        finishedTs: now(),
+        exitCode: reviewRun.exitCode,
+        usdCents: reviewRun.usdCents,
+        numTurns: reviewRun.numTurns,
+        resultSummary: truncate(reviewRun.finalText, 200),
+        sessionId: reviewRun.sessionId,
+        ...(reviewRun.error ? { error: reviewRun.error } : {}),
+      });
+      engStore.addBudgetUsage(taskId, { usdCents: reviewRun.usdCents }, now());
+
+      type RawFinding = { severity: string; area: string; note: string };
+      let rawFindings: RawFinding[] = [];
+      if (reviewRun.ok && reviewRun.finalText) {
+        try {
+          const parsed = JSON.parse(reviewRun.finalText.trim()) as unknown;
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "findings" in parsed && Array.isArray((parsed as Record<string, unknown>).findings)) {
+            rawFindings = ((parsed as Record<string, unknown>).findings as unknown[])
+              .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+              .map((x) => ({
+                severity: typeof x.severity === "string" ? x.severity : "info",
+                area: typeof x.area === "string" ? x.area : "",
+                note: typeof x.note === "string" ? x.note : String(x.note ?? ""),
+              }));
+          }
+        } catch {
+          // Malformed JSON — store [] rather than crashing.
+        }
+      }
+
+      // Sub-budget guard after run 1.
+      if (reviewRun.usdCents >= subCap) {
+        const findings = rawFindings.map((f) => ({
+          severity: f.severity as PreReviewFinding["severity"],
+          area: f.area,
+          note: redactSecrets(f.note),
+          response: "",
+        }));
+        engStore.setArtifact(taskId, { preReview: { findings, verdict: this.#deriveVerdict(findings) } }, now());
+        return;
+      }
+
+      // Run 2: resumed author session rebuts the findings.
+      task = this.#require(taskId);
+      const authorSessionId = task.claudeSessionId ?? randomUUID();
+      const rebuttalRunId = engStore.startAgentRun({ taskId, stage: "pr", sessionId: authorSessionId, iteration: 0, startedTs: now() });
+      let rebuttalRun: Awaited<ReturnType<AgentRunner["run"]>>;
+      try {
+        rebuttalRun = await agentRunner.run({
+          taskId,
+          stage: "pr",
+          sessionId: authorSessionId,
+          worktreePath: ws.path,
+          mode: "execute",
+          resume: true,
+          prompt: renderRebuttalPrompt(task, rawFindings as PreReviewFinding[]),
+          coldStartPrompt: renderColdStartPrompt(task, ""),
+          model: task.claudeModel,
+        });
+      } catch (err) {
+        engStore.finishAgentRun(rebuttalRunId, { status: "failed", finishedTs: now(), error: String(err) });
+        const findings = rawFindings.map((f) => ({
+          severity: f.severity as PreReviewFinding["severity"],
+          area: f.area,
+          note: redactSecrets(f.note),
+          response: "",
+        }));
+        engStore.setArtifact(taskId, { preReview: { findings, verdict: this.#deriveVerdict(findings) } }, now());
+        return;
+      }
+      engStore.finishAgentRun(rebuttalRunId, {
+        status: rebuttalRun.ok ? "succeeded" : "failed",
+        finishedTs: now(),
+        exitCode: rebuttalRun.exitCode,
+        usdCents: rebuttalRun.usdCents,
+        numTurns: rebuttalRun.numTurns,
+        resultSummary: truncate(rebuttalRun.finalText, 200),
+        sessionId: rebuttalRun.sessionId,
+        ...(rebuttalRun.error ? { error: rebuttalRun.error } : {}),
+      });
+      engStore.addBudgetUsage(taskId, { usdCents: rebuttalRun.usdCents }, now());
+
+      // Merge reviewer findings with author rebuttals.
+      let findings: PreReviewFinding[] = rawFindings.map((f) => ({
+        severity: f.severity as PreReviewFinding["severity"],
+        area: f.area,
+        note: redactSecrets(f.note),
+        response: "",
+      }));
+      if (rebuttalRun.ok && rebuttalRun.finalText) {
+        try {
+          const parsed = JSON.parse(rebuttalRun.finalText.trim()) as unknown;
+          if (Array.isArray(parsed) && parsed.length === rawFindings.length) {
+            findings = parsed
+              .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+              .map((x, i) => ({
+                severity: (typeof x.severity === "string" ? x.severity : rawFindings[i]?.severity ?? "info") as PreReviewFinding["severity"],
+                area: typeof x.area === "string" ? x.area : (rawFindings[i]?.area ?? ""),
+                note: redactSecrets(typeof x.note === "string" ? x.note : (rawFindings[i]?.note ?? "")),
+                response: redactSecrets(typeof x.response === "string" ? x.response : ""),
+              }));
+          }
+        } catch {
+          // Malformed rebuttal — keep raw findings with empty responses.
+        }
+      }
+
+      const artifact: PreReviewArtifact = { findings, verdict: this.#deriveVerdict(findings) };
+      engStore.setArtifact(taskId, { preReview: artifact }, now());
+    } catch {
+      try { engStore.setArtifact(taskId, { preReview: { findings: [], verdict: "lgtm" } }, now()); } catch { /* ignore */ }
+    }
+  }
+
+  #deriveVerdict(findings: readonly PreReviewFinding[]): string {
+    if (findings.some((f) => f.severity === "critical")) return "changes_requested";
+    if (findings.some((f) => f.severity === "high")) return "concerns_noted";
+    return "lgtm";
   }
 
   /** Build a clean, GitHub-rendered PR body: real summary, changed-file list, a one-line test result,

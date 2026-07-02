@@ -101,22 +101,23 @@ class FakeDeployer {
   }
 }
 
-function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh"; verifyUrl?: string | null } = {}) {
+function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh"; verifyUrl?: string | null; maxPreReviewUsdCents?: number; github?: GithubPort | null } = {}) {
   const engStore = new EngStore(":memory:");
   const runner = opts.runner ?? new FakeAgentRunner();
   const tester = opts.tester ?? new FakeTester(true);
-  const github = new FakeGithub();
+  const github = "github" in opts ? opts.github : new FakeGithub();
   const orchestrator = new Orchestrator({
     engStore,
     agentRunner: runner,
     workspace: new FakeWorkspace(),
     tester,
-    github,
+    github: github ?? null,
     deployer: new FakeDeployer(),
     deployEnabled: opts.deployEnabled ?? true,
     deployMode: opts.deployMode ?? "ssh",
     deployEnv: "prod",
     verifyUrl: opts.verifyUrl ?? null,
+    maxPreReviewUsdCents: opts.maxPreReviewUsdCents ?? 50,
     now: () => NOW,
   });
   const worker = new WorkerRunner({ engStore, orchestrator, workerId: "w1", now: () => NOW, leaseMs: 60_000 });
@@ -293,6 +294,7 @@ describe("worker: cancel-watcher integration", () => {
       deployMode: "ssh",
       deployEnv: "prod",
       verifyUrl: null,
+      maxPreReviewUsdCents: 50,
       now: () => NOW,
       cancelRegistry,
     });
@@ -498,6 +500,7 @@ describe("orchestrator: logPath propagation (LP-42)", () => {
       deployMode: "ssh",
       deployEnv: "prod",
       verifyUrl: null,
+      maxPreReviewUsdCents: 50,
       now: () => NOW,
     });
     const worker = new WorkerRunner({ engStore, orchestrator, workerId: "w1", now: () => NOW, leaseMs: 60_000 });
@@ -531,6 +534,7 @@ describe("orchestrator: logPath propagation (LP-42)", () => {
       deployMode: "ssh",
       deployEnv: "prod",
       verifyUrl: null,
+      maxPreReviewUsdCents: 50,
       now: () => NOW,
     });
     const worker = new WorkerRunner({ engStore, orchestrator, workerId: "w1", now: () => NOW, leaseMs: 60_000 });
@@ -641,6 +645,165 @@ async function advanceToPrProposed(engStore: EngStore, worker: WorkerRunner, id:
   applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
   await drain(worker);
 }
+
+// ─── LP-39: adversarial pre-review at pr:proposed ────────────────────────────
+
+function setupPreReviewTask(engStore: EngStore): string {
+  engStore.upsertFromJira([input()], NOW);
+  const id = taskId("10001");
+  engStore.setClaudeSession(id, "author-session-id", NOW);
+  engStore.setBranchAndWorktree(id, "LK-1-add-a-thing", "/wt/LK-1", NOW);
+  return id;
+}
+
+describe("orchestrator: pre-review on pr:proposed (LP-39)", () => {
+  it("happy path: stores findings + rebuttal responses + derived verdict", async () => {
+    const reviewerPayload = { findings: [{ severity: "high", area: "security", note: "No input sanitisation." }], verdict: "concerns_noted" };
+    const rebuttalPayload = [{ severity: "high", area: "security", note: "No input sanitisation.", response: "Validation is done upstream." }];
+    class HappyRunner {
+      calls: AgentRunArgs[] = [];
+      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+        this.calls.push(args);
+        const prCalls = this.calls.filter((c) => c.stage === "pr");
+        const text = prCalls.length === 1 ? JSON.stringify(reviewerPayload) : JSON.stringify(rebuttalPayload);
+        return { ok: true, sessionId: args.sessionId, finalText: text, usdCents: 5, numTurns: 1, exitCode: 0, timedOut: false };
+      }
+    }
+    const runner = new HappyRunner();
+    const { engStore, worker } = harness({ runner });
+    const id = setupPreReviewTask(engStore);
+    engStore.enqueue({ taskId: id, kind: "pre_review", dedupeKey: `${id}:pre_review` }, NOW);
+    await drain(worker);
+
+    const artifact = engStore.get(id)!.artifacts.preReview;
+    expect(artifact).not.toBeNull();
+    expect(artifact!.findings).toHaveLength(1);
+    expect(artifact!.findings[0]).toMatchObject({ severity: "high", area: "security", note: "No input sanitisation.", response: "Validation is done upstream." });
+    expect(artifact!.verdict).toBe("concerns_noted");
+
+    const prCalls = runner.calls.filter((c) => c.stage === "pr");
+    expect(prCalls).toHaveLength(2);
+    // Run 1: fresh session, not resumed.
+    expect(prCalls[0]!.resume).toBe(false);
+    expect(prCalls[0]!.sessionId).not.toBe("author-session-id");
+    // Run 2: author session resumed.
+    expect(prCalls[1]!.resume).toBe(true);
+    expect(prCalls[1]!.sessionId).toBe("author-session-id");
+    // Task stays at pr:proposed — no gate crossed.
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+  });
+
+  it("budget sub-cap: skips rebuttal when run 1 exhausts the sub-cap", async () => {
+    const reviewerPayload = { findings: [{ severity: "medium", area: "tests", note: "Edge case untested." }], verdict: "concerns_noted" };
+    class BudgetRunner {
+      calls: AgentRunArgs[] = [];
+      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+        this.calls.push(args);
+        return { ok: true, sessionId: args.sessionId, finalText: JSON.stringify(reviewerPayload), usdCents: 20, numTurns: 1, exitCode: 0, timedOut: false };
+      }
+    }
+    const runner = new BudgetRunner();
+    const { engStore, worker } = harness({ runner, maxPreReviewUsdCents: 20 });
+    const id = setupPreReviewTask(engStore);
+    engStore.enqueue({ taskId: id, kind: "pre_review", dedupeKey: `${id}:pre_review` }, NOW);
+    await drain(worker);
+
+    // Only one pr-stage call (no rebuttal).
+    expect(runner.calls.filter((c) => c.stage === "pr")).toHaveLength(1);
+    const artifact = engStore.get(id)!.artifacts.preReview;
+    expect(artifact).not.toBeNull();
+    expect(artifact!.findings[0]).toMatchObject({ severity: "medium", response: "" });
+  });
+
+  it("malformed JSON from reviewer: stores empty findings without throwing", async () => {
+    const { engStore, worker } = harness(); // FakeAgentRunner returns "did pr" (not JSON)
+    const id = setupPreReviewTask(engStore);
+    engStore.enqueue({ taskId: id, kind: "pre_review", dedupeKey: `${id}:pre_review` }, NOW);
+    await drain(worker);
+
+    const artifact = engStore.get(id)!.artifacts.preReview;
+    expect(artifact).not.toBeNull();
+    expect(artifact!.findings).toEqual([]);
+    expect(artifact!.verdict).toBe("lgtm");
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+  });
+
+  it("redacts secrets in finding note and response", async () => {
+    const secretKey = "sk-ant-api03-TestKeyAbcDefGhiJklMnoPqr12345";
+    const reviewerPayload = { findings: [{ severity: "low", area: "config", note: `Hardcoded key ${secretKey} found.` }], verdict: "lgtm" };
+    const rebuttalPayload = [{ severity: "low", area: "config", note: `Hardcoded key ${secretKey} found.`, response: `Key ${secretKey} is not in prod.` }];
+    class SecretRunner {
+      calls: AgentRunArgs[] = [];
+      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+        this.calls.push(args);
+        const prCalls = this.calls.filter((c) => c.stage === "pr");
+        const text = prCalls.length === 1 ? JSON.stringify(reviewerPayload) : JSON.stringify(rebuttalPayload);
+        return { ok: true, sessionId: args.sessionId, finalText: text, usdCents: 5, numTurns: 1, exitCode: 0, timedOut: false };
+      }
+    }
+    const { engStore, worker } = harness({ runner: new SecretRunner() });
+    const id = setupPreReviewTask(engStore);
+    engStore.enqueue({ taskId: id, kind: "pre_review", dedupeKey: `${id}:pre_review` }, NOW);
+    await drain(worker);
+
+    const finding = engStore.get(id)!.artifacts.preReview!.findings[0]!;
+    expect(finding.note).not.toContain(secretKey);
+    expect(finding.note).toContain("[REDACTED:secret-shaped]");
+    expect(finding.response).not.toContain(secretKey);
+    expect(finding.response).toContain("[REDACTED:secret-shaped]");
+  });
+
+  it("no github port: runs with empty diff, stores artifact normally", async () => {
+    const { engStore, worker } = harness({ github: null });
+    const id = setupPreReviewTask(engStore);
+    engStore.enqueue({ taskId: id, kind: "pre_review", dedupeKey: `${id}:pre_review` }, NOW);
+    await drain(worker);
+
+    // FakeAgentRunner returns non-JSON "did pr" → empty findings → lgtm
+    const artifact = engStore.get(id)!.artifacts.preReview;
+    expect(artifact).not.toBeNull();
+    expect(artifact!.findings).toEqual([]);
+    expect(artifact!.verdict).toBe("lgtm");
+  });
+
+  it("critical finding maps to changes_requested verdict", async () => {
+    const reviewerPayload = { findings: [{ severity: "critical", area: "security", note: "SQL injection." }], verdict: "changes_requested" };
+    class CriticalRunner {
+      calls: AgentRunArgs[] = [];
+      async run(args: AgentRunArgs): Promise<AgentRunResult> {
+        this.calls.push(args);
+        const prCalls = this.calls.filter((c) => c.stage === "pr");
+        const text = prCalls.length === 1 ? JSON.stringify(reviewerPayload) : JSON.stringify([{ severity: "critical", area: "security", note: "SQL injection.", response: "Fixed with parameterised queries." }]);
+        return { ok: true, sessionId: args.sessionId, finalText: text, usdCents: 5, numTurns: 1, exitCode: 0, timedOut: false };
+      }
+    }
+    const { engStore, worker } = harness({ runner: new CriticalRunner() });
+    const id = setupPreReviewTask(engStore);
+    engStore.enqueue({ taskId: id, kind: "pre_review", dedupeKey: `${id}:pre_review` }, NOW);
+    await drain(worker);
+
+    expect(engStore.get(id)!.artifacts.preReview!.verdict).toBe("changes_requested");
+  });
+});
+
+describe("orchestrator: pre-review runs automatically on reaching pr:proposed (LP-39)", () => {
+  it("pre_review job is enqueued and run when the task reaches pr:proposed via the full flow", async () => {
+    const runner = new AcCheckRunner();
+    const { engStore, worker } = harness({ runner });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    await advanceToPrProposed(engStore, worker, id);
+
+    // The pre_review job was enqueued automatically by the state-machine effect and ran.
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    // Artifact is stored (AcCheckRunner returns non-matching JSON for pr stage → empty findings).
+    const preReview = engStore.get(id)!.artifacts.preReview;
+    expect(preReview).not.toBeNull();
+    // The existing acCheck artifact is also present.
+    expect(engStore.get(id)!.artifacts.acCheck).not.toBeNull();
+  });
+});
 
 describe("orchestrator: AC check on pr:proposed (LP-33)", () => {
   it("stores acCheck artifact when tests pass", async () => {

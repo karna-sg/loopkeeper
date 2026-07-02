@@ -176,7 +176,7 @@ const EFFECTS_BY_TARGET: Readonly<Record<string, readonly TransitionEffect[]>> =
   "plan:in_progress": [{ kind: "enqueue_job", job: "plan" }],
   "plan:completed_unapproved": [{ kind: "notify", reason: "plan_ready" }],
   "plan:approved": [{ kind: "enqueue_job", job: "dev_test" }],
-  "pr:proposed": [{ kind: "notify", reason: "pr_ready" }],
+  "pr:proposed": [{ kind: "notify", reason: "pr_ready" }, { kind: "enqueue_job", job: "pre_review" }],
   "pr:creating": [{ kind: "enqueue_job", job: "create_pr" }],
   "review:comments_received": [{ kind: "notify", reason: "comments_arrived" }],
   "merge:ready": [{ kind: "notify", reason: "merge_ready" }],

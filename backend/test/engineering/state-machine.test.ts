@@ -148,6 +148,12 @@ describe("state-machine: effects", () => {
     expect(effectsFor(ss("dev", "blocked"))).toEqual([{ kind: "notify", reason: "blocked" }]);
     expect(effectsFor(ss("dev", "cancelled"))).toEqual([]);
   });
+
+  it("pr:proposed fires both a pr_ready notification and a pre_review job (LP-39)", () => {
+    const effects = effectsFor(ss("pr", "proposed"));
+    expect(effects).toContainEqual({ kind: "notify", reason: "pr_ready" });
+    expect(effects).toContainEqual({ kind: "enqueue_job", job: "pre_review" });
+  });
 });
 
 describe("state-machine: budget guards", () => {

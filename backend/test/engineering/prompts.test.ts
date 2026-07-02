@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { renderAcCheckPrompt } from "../../src/engineering/prompts.ts";
+import { renderAcCheckPrompt, renderPreReviewPrompt, renderRebuttalPrompt } from "../../src/engineering/prompts.ts";
 import type { DiffFile } from "../../src/engineering/ports.ts";
-import type { EngTask } from "../../src/domain/eng-task.ts";
+import type { EngTask, PreReviewFinding } from "../../src/domain/eng-task.ts";
 
 const baseTask = {
   id: "task-1",
@@ -23,7 +23,7 @@ const baseTask = {
   claudeModel: null,
   stage: "pr" as const,
   status: "proposed" as const,
-  artifacts: { plan: null, dev: null, test: null, pr: null, review: null, merge: null, deploy: null, verify: null, rollback: null, acCheck: null },
+  artifacts: { plan: null, dev: null, test: null, pr: null, review: null, merge: null, deploy: null, verify: null, rollback: null, acCheck: null, preReview: null },
   budget: { maxIterations: 6, iterationsUsed: 0, maxUsdCents: 500, usdCentsUsed: 0, maxReviewRounds: 3, reviewRoundsUsed: 0 },
   lastNotifiedStatus: null,
   lastError: null,
@@ -86,5 +86,65 @@ describe("renderAcCheckPrompt", () => {
     const prompt = renderAcCheckPrompt(baseTask, sampleDiff);
     expect(prompt).toContain("LK-1");
     expect(prompt).toContain("Add a thing");
+  });
+});
+
+describe("renderPreReviewPrompt", () => {
+  it("includes the Jira key and diff content", () => {
+    const prompt = renderPreReviewPrompt(baseTask, sampleDiff);
+    expect(prompt).toContain("LK-1");
+    expect(prompt).toContain("src/foo.ts");
+  });
+
+  it("instructs the agent to return a JSON object with findings array", () => {
+    const prompt = renderPreReviewPrompt(baseTask, sampleDiff);
+    expect(prompt).toContain('"findings"');
+    expect(prompt).toContain('"severity"');
+    expect(prompt).toContain('"area"');
+    expect(prompt).toContain('"note"');
+  });
+
+  it("identifies the reviewer as independent (not the author)", () => {
+    const prompt = renderPreReviewPrompt(baseTask, sampleDiff);
+    expect(prompt).toContain("independent");
+  });
+
+  it("falls back gracefully when diff is empty", () => {
+    const prompt = renderPreReviewPrompt(baseTask, []);
+    expect(typeof prompt).toBe("string");
+    expect(prompt.length).toBeGreaterThan(0);
+    expect(prompt).toContain("no diff available");
+  });
+});
+
+describe("renderRebuttalPrompt", () => {
+  const findings: PreReviewFinding[] = [
+    { severity: "high", area: "security", note: "No input validation on user data.", response: "" },
+    { severity: "medium", area: "tests", note: "Edge case for empty array not tested.", response: "" },
+  ];
+
+  it("includes each finding area and note", () => {
+    const prompt = renderRebuttalPrompt(baseTask, findings);
+    expect(prompt).toContain("security");
+    expect(prompt).toContain("No input validation on user data.");
+    expect(prompt).toContain("tests");
+    expect(prompt).toContain("Edge case for empty array not tested.");
+  });
+
+  it("names the Jira key so the author knows what they're responding to", () => {
+    const prompt = renderRebuttalPrompt(baseTask, findings);
+    expect(prompt).toContain("LK-1");
+  });
+
+  it("instructs the agent to return a JSON array with a response field", () => {
+    const prompt = renderRebuttalPrompt(baseTask, findings);
+    expect(prompt).toContain('"response"');
+    expect(prompt).toContain("JSON array");
+  });
+
+  it("handles empty findings list", () => {
+    const prompt = renderRebuttalPrompt(baseTask, []);
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain("[]");
   });
 });

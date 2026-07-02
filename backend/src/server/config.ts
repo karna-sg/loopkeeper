@@ -58,6 +58,8 @@ export interface EngConfig {
   maxIterations: number;
   maxUsdCents: number;
   maxReviewRounds: number;
+  /** Max spend (USD cents) for the two pre-review agent runs. Caps spend without blocking pr:proposed. */
+  maxPreReviewUsdCents: number;
   /** Per-run wall-clock cap (ms). */
   runTimeoutMs: number;
   /** Max parallel worktrees/tasks. */
@@ -187,6 +189,7 @@ function envEng(env: NodeJS.ProcessEnv, dataDir: string): EngConfig {
     maxIterations: numeric(env.ENG_MAX_ITERATIONS, 6),
     maxUsdCents: numeric(env.ENG_TASK_BUDGET_USD_CENTS, 500),
     maxReviewRounds: numeric(env.ENG_MAX_REVIEW_ROUNDS, 5),
+    maxPreReviewUsdCents: numeric(env.ENG_PRE_REVIEW_BUDGET_USD_CENTS, 50),
     runTimeoutMs: numeric(env.ENG_RUN_TIMEOUT_MS, 1_200_000),
     maxConcurrent: numeric(env.ENG_MAX_CONCURRENT, 1),
     agentLogDir: env.ENG_AGENT_LOG_DIR ?? join(dataDir, "eng", "agent-logs"),
