@@ -661,6 +661,7 @@ describe("orchestrator: pre-review on pr:proposed (LP-39)", () => {
     const reviewerPayload = { findings: [{ severity: "high", area: "security", note: "No input sanitisation." }], verdict: "concerns_noted" };
     const rebuttalPayload = [{ severity: "high", area: "security", note: "No input sanitisation.", response: "Validation is done upstream." }];
     class HappyRunner {
+      ok = true;
       calls: AgentRunArgs[] = [];
       async run(args: AgentRunArgs): Promise<AgentRunResult> {
         this.calls.push(args);
@@ -696,6 +697,7 @@ describe("orchestrator: pre-review on pr:proposed (LP-39)", () => {
   it("budget sub-cap: skips rebuttal when run 1 exhausts the sub-cap", async () => {
     const reviewerPayload = { findings: [{ severity: "medium", area: "tests", note: "Edge case untested." }], verdict: "concerns_noted" };
     class BudgetRunner {
+      ok = true;
       calls: AgentRunArgs[] = [];
       async run(args: AgentRunArgs): Promise<AgentRunResult> {
         this.calls.push(args);
@@ -733,6 +735,7 @@ describe("orchestrator: pre-review on pr:proposed (LP-39)", () => {
     const reviewerPayload = { findings: [{ severity: "low", area: "config", note: `Hardcoded key ${secretKey} found.` }], verdict: "lgtm" };
     const rebuttalPayload = [{ severity: "low", area: "config", note: `Hardcoded key ${secretKey} found.`, response: `Key ${secretKey} is not in prod.` }];
     class SecretRunner {
+      ok = true;
       calls: AgentRunArgs[] = [];
       async run(args: AgentRunArgs): Promise<AgentRunResult> {
         this.calls.push(args);
@@ -769,6 +772,7 @@ describe("orchestrator: pre-review on pr:proposed (LP-39)", () => {
   it("critical finding maps to changes_requested verdict", async () => {
     const reviewerPayload = { findings: [{ severity: "critical", area: "security", note: "SQL injection." }], verdict: "changes_requested" };
     class CriticalRunner {
+      ok = true;
       calls: AgentRunArgs[] = [];
       async run(args: AgentRunArgs): Promise<AgentRunResult> {
         this.calls.push(args);
