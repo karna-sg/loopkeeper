@@ -104,6 +104,18 @@ export type JobState = (typeof JOB_STATES)[number];
 
 // --- Per-stage artifacts (FR-8). camelCase field names are the frozen client contract. ---
 
+/**
+ * DiffGuard soft flag (LP-53): a supply-chain advisory recorded when a commit touched a dependency
+ * manifest/lockfile. Never a hard block — it surfaces "N new deps — confirm" at the merge gate.
+ * Optional/additive on the artifacts it rides (`DevArtifact`, `PrArtifact`) so old rows decode `undefined`.
+ */
+export interface DiffGuardFlag {
+  /** Estimated dependencies added across the branch (soft advisory; intentionally over-approximates). */
+  newDeps: number;
+  /** Dependency-manifest / lockfile paths that changed (e.g. `package.json`, `pnpm-lock.yaml`). */
+  flaggedPaths: string[];
+}
+
 export interface PlanArtifact {
   /** Full generated plan markdown (FR-12, readable/approvable). */
   text: string;
@@ -130,6 +142,8 @@ export interface DevArtifact {
   /** Dev/test fix-loop iteration count (budget). */
   iterations: number;
   lastIterationTs: string;
+  /** DiffGuard soft dependency-change flag accumulated over the dev/test commits (LP-53). Absent when no manifest changed. */
+  diffGuard?: DiffGuardFlag;
 }
 
 export interface TestRun {
@@ -157,6 +171,8 @@ export interface PrArtifact {
   proposedTs: string;
   createdTs: string | null;
   approvedBy: string | null;
+  /** DiffGuard soft dependency-change flag mirrored from the dev artifact so the merge gate surfaces it (LP-53). */
+  diffGuard?: DiffGuardFlag;
 }
 
 export interface ReviewComment {

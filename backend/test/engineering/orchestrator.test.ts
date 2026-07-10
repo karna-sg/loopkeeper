@@ -4,7 +4,8 @@ import { Orchestrator, applyTransition } from "../../src/engineering/orchestrato
 import { WorkerRunner } from "../../src/engineering/worker.ts";
 import { branchNameFor, taskId } from "../../src/domain/eng-task.ts";
 import type { EngTask, EngTaskInput } from "../../src/domain/eng-task.ts";
-import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, DeployRun, DiffFile, GithubPort, PrState, PullRequest, TestOutcome, WorktreeInfo } from "../../src/engineering/ports.ts";
+import { DiffGuardError } from "../../src/engineering/diff-guard.ts";
+import type { AgentRunArgs, AgentRunResult, CommitResult, DeployOutcome, DeployRun, DiffFile, GithubPort, PrState, PullRequest, TestOutcome, Workspace, WorktreeInfo } from "../../src/engineering/ports.ts";
 
 const NOW = "2026-06-27T00:00:00Z";
 
@@ -101,7 +102,7 @@ class FakeDeployer {
   }
 }
 
-function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh"; verifyUrl?: string | null } = {}) {
+function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; workspace?: Workspace; deployEnabled?: boolean; deployMode?: "github-actions" | "ssh"; verifyUrl?: string | null } = {}) {
   const engStore = new EngStore(":memory:");
   const runner = opts.runner ?? new FakeAgentRunner();
   const tester = opts.tester ?? new FakeTester(true);
@@ -109,7 +110,7 @@ function harness(opts: { tester?: FakeTester; runner?: FakeAgentRunner; deployEn
   const orchestrator = new Orchestrator({
     engStore,
     agentRunner: runner,
-    workspace: new FakeWorkspace(),
+    workspace: opts.workspace ?? new FakeWorkspace(),
     tester,
     github,
     deployer: new FakeDeployer(),
@@ -807,5 +808,66 @@ describe("orchestrator: plan quality judge (LP-101)", () => {
     expect(judgeCall).toBeDefined();
     expect(judgeCall!.resume).toBe(false);
     expect(judgeCall!.model).toBe("claude-haiku-4-5-20251001");
+  });
+});
+
+// ─── LP-53: DiffGuard secret-scan + dependency-change flag before commitAndPush ───────────────
+
+/** Workspace whose commitAndPush hard-fails (as GitWorkspace does on a planted secret). */
+class SecretBlockingWorkspace extends FakeWorkspace {
+  override async commitAndPush(): Promise<CommitResult> {
+    throw new DiffGuardError([{ path: "backend/src/config.ts", reason: "secret-shaped staged content" }]);
+  }
+}
+
+/** Workspace whose commitAndPush returns a soft dependency-change flag (a manifest changed). */
+class DepFlaggingWorkspace extends FakeWorkspace {
+  override async commitAndPush(): Promise<CommitResult> {
+    return { sha: "commitsha", pushed: true, filesChanged: 1, files: ["package.json"], diffGuard: { newDeps: 2, flaggedPaths: ["package.json"] } };
+  }
+}
+
+describe("orchestrator: DiffGuard (LP-53)", () => {
+  it("a planted secret skips the commit and escalates the task to blocked (actor system)", async () => {
+    const { engStore, worker } = harness({ workspace: new SecretBlockingWorkspace() });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+    await drain(worker);
+
+    const task = engStore.get(id)!;
+    // Commit skipped → never reached a proposed PR; blocked in the stage it occurred in (dev).
+    expect(task.status).toBe("blocked");
+    expect(task.stage).toBe("dev");
+    expect(task.artifacts.pr).toBeNull();
+    // The escalation note is redacted and attributed to the system actor (no gate crossed).
+    expect(task.lastError).toContain("DiffGuard");
+    const blockEvent = engStore.events(id).find((e) => e.toStatus === "blocked");
+    expect(blockEvent?.actor).toBe("system");
+  });
+
+  it("persists a soft dep-change flag onto the dev and PR artifacts (merge-gate surface)", async () => {
+    const { engStore, worker } = harness({ workspace: new DepFlaggingWorkspace() });
+    engStore.upsertFromJira([input()], NOW);
+    const id = taskId("10001");
+
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "in_progress" }, actor: "user", ts: NOW }, NOW);
+    await drain(worker);
+    applyTransition(engStore, { taskId: id, to: { stage: "plan", status: "approved" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+    await drain(worker);
+
+    // Soft flag → commit proceeds → proposed PR, with the flag on both artifacts.
+    expect(engStore.get(id)).toMatchObject({ stage: "pr", status: "proposed" });
+    expect(engStore.get(id)!.artifacts.dev?.diffGuard).toEqual({ newDeps: 2, flaggedPaths: ["package.json"] });
+    expect(engStore.get(id)!.artifacts.pr?.diffGuard).toEqual({ newDeps: 2, flaggedPaths: ["package.json"] });
+
+    // The flag survives PR creation (Gate 2 → create_pr rebuilds the PR artifact).
+    applyTransition(engStore, { taskId: id, to: { stage: "pr", status: "creating" }, actor: "user", gateApproved: true, ts: NOW }, NOW);
+    await drain(worker);
+    expect(engStore.get(id)).toMatchObject({ stage: "review", status: "awaiting_review" });
+    expect(engStore.get(id)!.artifacts.pr?.diffGuard).toEqual({ newDeps: 2, flaggedPaths: ["package.json"] });
   });
 });

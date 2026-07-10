@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { EngStore, TransitionArgs, TransitionOutcome } from "../store/eng-store.ts";
-import type { AcCheckItem, EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
+import type { AcCheckItem, DiffGuardFlag, EngJob, EngTask, PrArtifact, ReviewComment, StageStatus } from "../domain/eng-task.ts";
 import { effectsFor, shouldRetryAfterTestFailure } from "./state-machine.ts";
+import { combineDepFlags } from "./diff-guard.ts";
 import { redactSecrets } from "../redact.ts";
 import { renderAcCheckPrompt, renderAddressCommentsPrompt, renderBuildFixPrompt, renderColdStartPrompt, renderDevPrompt, renderFixPrompt, renderPlanJudgePrompt, renderPlanPrompt } from "./prompts.ts";
 import type { AgentRunner, DeployerPort, DiffFile, GithubPort, TestOutcome, Tester, Workspace } from "./ports.ts";
@@ -184,6 +185,9 @@ export class Orchestrator {
     let lastTestSummary = seedFix ? base.artifacts.deploy?.ciError ?? "CI/build failed on main." : "";
     let first = !seedFix;
     let buildSeed = seedFix;
+    // DiffGuard soft flag (LP-53), accumulated across the fix-loop commits. Seeded from the persisted
+    // dev artifact so a block→resume (fresh job) doesn't lose dep changes flagged before the block.
+    let depFlag: DiffGuardFlag | null = base.artifacts.dev?.diffGuard ?? null;
     for (;;) {
       this.#advance(taskId, { stage: "dev", status: "in_progress" });
       const budget = engStore.addBudgetUsage(taskId, { iterations: 1 }, now());
@@ -212,9 +216,10 @@ export class Orchestrator {
       if (!run.ok) throw new Error(run.error ?? "dev run failed");
 
       const commit = await workspace.commitAndPush(task, `${task.jiraKey}: ${task.title}`);
+      depFlag = combineDepFlags(depFlag, commit.diffGuard ?? null);
       engStore.setArtifact(
         taskId,
-        { dev: { summary: redactSecrets(run.finalText), branch: ws.branch, branchURL: this.#branchUrl(task, ws.branch), filesChanged: commit.filesChanged, iterations: budget?.iterationsUsed ?? 0, lastIterationTs: now() } },
+        { dev: { summary: redactSecrets(run.finalText), branch: ws.branch, branchURL: this.#branchUrl(task, ws.branch), filesChanged: commit.filesChanged, iterations: budget?.iterationsUsed ?? 0, lastIterationTs: now(), ...(depFlag ? { diffGuard: depFlag } : {}) } },
         now(),
       );
       this.#advance(taskId, { stage: "dev", status: "done" });
@@ -231,7 +236,7 @@ export class Orchestrator {
       if (result.passed) {
         this.#advance(taskId, { stage: "test", status: "passed" });
         await this.#runAcCheck(this.#require(taskId), ws.path);
-        engStore.setArtifact(taskId, { pr: this.#proposePr(this.#require(taskId), result, commit.files) }, now());
+        engStore.setArtifact(taskId, { pr: this.#proposePr(this.#require(taskId), result, commit.files, depFlag ?? undefined) }, now());
         this.#advance(taskId, { stage: "pr", status: "proposed" });
         return;
       }
@@ -267,6 +272,8 @@ export class Orchestrator {
       proposedTs: proposed?.proposedTs ?? now(),
       createdTs: now(),
       approvedBy: proposed?.approvedBy ?? null,
+      // Preserve the DiffGuard soft flag from the proposed artifact so the merge gate still surfaces it (LP-53).
+      ...(proposed?.diffGuard ? { diffGuard: proposed.diffGuard } : {}),
     };
     engStore.setArtifact(taskId, { pr: artifact }, now());
     this.#advance(taskId, { stage: "pr", status: "created" });
@@ -562,7 +569,7 @@ export class Orchestrator {
 
   /** Build a clean, GitHub-rendered PR body: real summary, changed-file list, a one-line test result,
    *  and the plan tucked in a collapsible section. No raw agent ramble or ANSI dumps. */
-  #proposePr(task: EngTask, test: TestOutcome, files: readonly string[]): PrArtifact {
+  #proposePr(task: EngTask, test: TestOutcome, files: readonly string[], diffGuard?: DiffGuardFlag): PrArtifact {
     const plan = task.artifacts.plan?.editedText ?? task.artifacts.plan?.text ?? "";
     const fileList = files.length > 0 ? files.map((f) => `- \`${f}\``).join("\n") : `_${files.length} files changed_`;
     const testLine = test.passed
@@ -586,6 +593,7 @@ export class Orchestrator {
       proposedTs: this.#d.now(),
       createdTs: null,
       approvedBy: null,
+      ...(diffGuard ? { diffGuard } : {}),
     };
   }
 }
