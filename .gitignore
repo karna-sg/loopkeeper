@@ -6,11 +6,24 @@ dist/
 # Secrets — never commit
 .env
 .env.*
+# ...but DO ship the example templates contributors need
+!.env.example
+!**/.env.example
 deploy/.env
 deploy/loopkeeper.env
 *.pem
 *.p8
 AuthKey_*.p8
+
+# Databases, encrypted vault & keys (defense-in-depth — these default to the
+# data volume / ~/.loopkeeper, not the repo, but never commit one by accident)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.enc
+master.key
+*.mobileprovision
 
 # Local run artifacts
 *.local.json
