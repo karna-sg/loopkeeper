@@ -4,7 +4,7 @@
  * with fakes (mirrors the existing `FakePushSender` / `fake-source.ts` pattern). The real adapters
  * (Claude Code, git, GitHub REST, SSH deploy) implement these; tests substitute scripted fakes.
  */
-import type { EngTask, ReviewComment, Stage } from "../domain/eng-task.ts";
+import type { DiffGuardFlag, EngTask, ReviewComment, Stage } from "../domain/eng-task.ts";
 
 export interface AgentRunResult {
   ok: boolean;
@@ -58,6 +58,8 @@ export interface CommitResult {
   filesChanged: number;
   /** Paths of the changed files (for a clean PR body). */
   files: string[];
+  /** DiffGuard soft dependency-change flag for this commit (LP-53). Absent when no manifest/lockfile changed. */
+  diffGuard?: DiffGuardFlag;
 }
 
 /** Per-task git worktree lifecycle (one mirror clone + a worktree per task branch). */

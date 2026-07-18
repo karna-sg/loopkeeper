@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { branchNameFor } from "../../domain/eng-task.ts";
-import type { EngTask } from "../../domain/eng-task.ts";
+import type { DiffGuardFlag, EngTask } from "../../domain/eng-task.ts";
 import type { CommitResult, Workspace, WorktreeInfo } from "../ports.ts";
+import { DiffGuardError, depFlagFromReport, inspectDiff, stagedFilesFromDiff } from "../diff-guard.ts";
 import { runProcess } from "./spawn.ts";
 
 export interface GitWorkspaceConfig {
@@ -89,7 +90,15 @@ export class GitWorkspace implements Workspace {
     const status = await this.#git(path, ["status", "--porcelain"]);
     const files = status.out ? status.out.split("\n").filter(Boolean).map((l) => l.slice(3).trim()) : [];
     const filesChanged = files.length;
+    let diffGuard: DiffGuardFlag | undefined;
     if (filesChanged > 0) {
+      // DiffGuard (LP-53): inspect the STAGED content BEFORE committing. A hard secret/forbidden-path
+      // hit throws (→ the worker escalates to `blocked`, commit skipped); a dependency change is a soft
+      // flag returned to the orchestrator. Scans only added (`+`) lines, so it never re-flags untouched
+      // code or reacts to deletions.
+      const report = inspectDiff(stagedFilesFromDiff((await this.#git(path, ["diff", "--cached"])).out));
+      if (report.blocked) throw new DiffGuardError(report.secretHits);
+      diffGuard = depFlagFromReport(report) ?? undefined;
       // Inject identity per-commit (the container has no global git identity); never persisted to config.
       const ident = ["-c", `user.name=${this.#cfg.authorName}`, "-c", `user.email=${this.#cfg.authorEmail}`];
       const commit = await this.#git(path, [...ident, "commit", "-m", message]);
@@ -98,7 +107,7 @@ export class GitWorkspace implements Workspace {
     const push = await this.#git(path, ["push", "-u", "origin", branch], true);
     if (!push.ok) throw new Error(`git push failed: ${push.out.slice(-300)}`);
     const sha = (await this.#git(path, ["rev-parse", "HEAD"])).out.trim() || null;
-    return { sha, pushed: true, filesChanged, files };
+    return { sha, pushed: true, filesChanged, files, ...(diffGuard ? { diffGuard } : {}) };
   }
 
   async branchLog(task: EngTask): Promise<string> {
